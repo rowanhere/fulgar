@@ -4,6 +4,7 @@ import {
   buildNegotiatedTemplate, classifyTemplateResult, decodeMempool, headerMatchesTemplate,
   isHexTarget, mempoolEntryAcceptable, negotiatedRequired, parseFrame, poolWsUrl,
   pruneOutstanding, settleOutstanding, negotiatedColdStart, type NegotiatedColdStartDeps,
+  negotiatedBackendNote, NEGOTIATED_BANNER,
 } from './negotiatedClient.js';
 import type { RestoreOutcome } from './persistence.js';
 import type { SnapshotConfirmResult } from './miner.js';
@@ -399,4 +400,14 @@ test('parseFrame: a JSON null / non-object frame is rejected, not returned', () 
   assert.equal(parseFrame('not json'), null);
   const ok = parseFrame('{"type":"chain_info"}');
   assert.deepEqual(ok, { type: 'chain_info' });
+});
+
+test('negotiatedBackendNote: an actionable fallback reason wins the rendered line', () => {
+  const note = 'native engine outdated — rebuild: cd native/brc-pow && cargo build --release; using wasm';
+  assert.equal(negotiatedBackendNote({ useNative: false, backendNote: note }), note);
+});
+
+test('negotiatedBackendNote: the mode banner otherwise (native running, or wasm chosen)', () => {
+  assert.equal(negotiatedBackendNote({ useNative: true }), NEGOTIATED_BANNER);
+  assert.equal(negotiatedBackendNote({ useNative: false }), NEGOTIATED_BANNER);
 });

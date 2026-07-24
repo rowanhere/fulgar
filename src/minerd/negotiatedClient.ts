@@ -21,9 +21,9 @@
 // negotiatedRequired() and the hand-off in poolClient.ts.
 //
 // Reuses the existing solo machinery: HelperPool (failover reads), ChainSync +
-// VerifierPool (parallel-PoW bootstrap), GrindPool (wasm grind workers,
-// continuous share mode). Native engine + smart throttle control are follow-ups;
-// the start duty still honors Smart Max (straight to 1.0).
+// VerifierPool (parallel-PoW bootstrap), and the same grind engines as the
+// classic pool path (GrindPool or NativeGrindPool via the shared poolEngine
+// gate, continuous share mode) with the same adaptive throttle wiring.
 import { Blockchain } from '../chain/blockchain.js';
 import {
   computeTxRoot, encodeBlock, encodeHeader, type Block, type BlockHeader,
@@ -36,6 +36,8 @@ import { bytesToHex, hexToBytes } from '../util/binary.js';
 import { resolveHelpers } from './config.js';
 import { GrindPool } from './grindPool.js';
 import { HelperPool } from './helperPool.js';
+import { NativeGrindPool } from './nativeGrindPool.js';
+import { resolvePoolEngine, type PoolEngineChoice } from './poolEngine.js';
 import {
   chainIntegrityOK, confirmRestoredSnapshot, SAVE_EVERY_BLOCKS, SAVE_EVERY_MS,
   SNAPSHOT_CONFIRM_TIMEOUT_MS, type SnapshotConfirmResult,
@@ -419,6 +421,16 @@ export async function negotiatedColdStart(
   return { ok: true, warm };
 }
 
+export const NEGOTIATED_BANNER = 'negotiated mode — this miner builds its own blocks for the pool';
+
+/** backendNote is ONE rendered line. When native was selected but demoted, the
+ *  actionable reason outranks the mode banner — the negotiated-mode fact is
+ *  also announced as a startup event, the demotion reason is announced nowhere
+ *  else. */
+export function negotiatedBackendNote(choice: PoolEngineChoice): string {
+  return choice.backendNote ?? NEGOTIATED_BANNER;
+}
+
 /**
  * Live negotiated pool client: bootstrap our own chain, connect to the pool WS,
  * build + register templates, grind them against the personal (vardiff) share
@@ -443,21 +455,27 @@ export async function runNegotiatedPoolClient(
   }
 
   const startDuty = smartStartDuty(smart, throttle);
+  // Same engine gate as the classic pool path (poolEngine.ts): honor a native
+  // selection, demote to wasm with a persistent visible reason otherwise.
+  const engine = resolvePoolEngine();
+  const backend = engine.useNative ? 'native' : 'wasm';
+  const backendNote = negotiatedBackendNote(engine);
   if (status) {
-    status.backend = 'wasm';
-    status.backendNote = 'negotiated mode — this miner builds its own blocks for the pool';
+    status.backend = backend;
+    status.backendNote = backendNote;
     status.throttle = startDuty;
   }
   reporter.status(status ?? {
     mode: 'pool',
     target: poolUrl,
-    backend: 'wasm',
-    backendNote: 'negotiated mode — this miner builds its own blocks for the pool',
+    backend,
+    backendNote,
     workers,
     throttle: startDuty,
     address: payoutAddress,
   });
   reporter.event('info', `[nego-miner] ${poolUrl} requires negotiated mode — this miner will build its own blocks (pool-payout coinbase) and mine those.`);
+  reporter.event('info', `[nego-miner] grind engine: ${backend}`);
 
   // Runs BEFORE the chain bootstrap: that is a multi-minute full replay, and a
   // negotiated miner is a full consensus client — it is the one kind of pool
@@ -590,12 +608,13 @@ export async function runNegotiatedPoolClient(
   // dies early (subject to a finalized anchor existing — short chains skip).
   maybeSave();
 
-  const grind = new GrindPool(workers, startDuty);
+  const grind: GrindPool | NativeGrindPool = engine.useNative
+    ? new NativeGrindPool(workers, startDuty)
+    : new GrindPool(workers, startDuty);
   // Same adaptive-throttle wiring as the classic pool path (poolClient.ts): the
   // negotiated path used to call smartStartDuty once and never adjust, so
   // considerate stayed pinned at CONSIDERATE_START and off/max never eased off a
-  // busy box. Native engine on negotiated is a separate future item — this is
-  // wasm-only, matching the grind above.
+  // busy box.
   const smartController = smart !== 'off'
     ? new SmartController(
       grind,
