@@ -1,10 +1,7 @@
 // src/minerd/poolClient.ts
 import os from 'node:os';
-import { existsSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
 import { GrindPool } from './grindPool.js';
-import { NATIVE_BIN, NativeGrindPool } from './nativeGrindPool.js';
-import { nativePowIsCurrent } from './nativeParity.js';
+import { NativeGrindPool } from './nativeGrindPool.js';
 import { hexToBytes } from '../util/binary.js';
 import { HEADER_LEN } from '../chain/block.js';
 import { ConsoleReporter, type MinerReporter, type ReporterStatus } from './reporter.js';
@@ -15,26 +12,9 @@ import { startPoolStats } from './poolStats.js';
 import { checkForUpdate } from './updateCheck.js';
 import { isFulgurPool } from './pools.js';
 import { NONCE_SPACE } from './partition.js';
-import { currentEngine } from './selectors.js';
 import { SmartController, smartStartDuty } from './smartController.js';
 import { createDemandSignal } from './demand.js';
-
-/** One-time probe: does the installed native binary accept the `continuous` grind
- *  arg? An older brc-pow build rejects it (usage exit 2). Returns true only on a
- *  clean exit 0, so pool mode falls back to wasm for a stale/incompatible binary
- *  instead of crash-looping children. Easy target over a single-nonce range. */
-function nativeContinuousOk(): boolean {
-  try {
-    const r = spawnSync(
-      NATIVE_BIN,
-      ['grind', '0'.repeat(296), 'f'.repeat(64), '0', '1', '1', '1'],
-      { timeout: 5000, stdio: 'ignore' },
-    );
-    return r.status === 0;
-  } catch {
-    return false;
-  }
-}
+import { resolvePoolEngine } from './poolEngine.js';
 
 export type ShareVerdict = 'accepted' | 'block-strike' | 'rejected';
 
@@ -620,24 +600,9 @@ export async function runPoolClient(
     releaseNotesUrl: initialReg.releaseNotesUrl,
   };
   void checkForUpdate({ reporter, poolVersionFields: versionFields, signal }).catch(() => {});
-  // Native pool grinding needs a binary that (a) exists, (b) understands the
-  // `continuous` grind arg (an older build rejects it and would crash-loop), and
-  // (c) GRINDS the current PoW at the fork boundary. Post the Sandglass v3 fork a
-  // binary built before the fork (or against the earlier 34,800 fork constant)
-  // still grinds Argon2id in the live range — it passes (a) and (b) but produces
-  // 100% invalid shares — so nativePowIsCurrent() grinds one nonce at exactly the
-  // fork height and checks the digest. Any failure → fall back to wasm.
-  const nativeSelected = currentEngine(process.env.MINER_NATIVE) === 'native';
-  const useNative = nativeSelected && existsSync(NATIVE_BIN) && nativeContinuousOk() && nativePowIsCurrent();
-  // Surface the fallback PERSISTENTLY (via status.backendNote, rendered by both
-  // reporters) instead of a scrolling event, so the user sees WHY native isn't
-  // running without quitting. Distinguish "not built" (needs Rust) from "outdated".
-  let backendNote: string | undefined;
-  if (nativeSelected && !useNative) {
-    backendNote = existsSync(NATIVE_BIN)
-      ? 'native engine outdated — rebuild: cd native/brc-pow && cargo build --release; using wasm'
-      : 'native engine not built — install Rust (https://rustup.rs) and build it; using wasm';
-  }
+  // Engine gate + fallback note (why the probes exist, why the note is
+  // persistent): shared with the negotiated path — see poolEngine.ts.
+  const { useNative, backendNote } = resolvePoolEngine();
   // The duty cycle the grind actually STARTS at. Under a Smart mode the controller
   // owns the throttle and `throttle` (MINER_THROTTLE) is only a manual leftover —
   // starting from it made Max crawl up from a previously-lowered manual value
@@ -647,7 +612,7 @@ export async function runPoolClient(
 
   if (status) {
     // Correct the passed-in status to what the pool gate actually resolved: the
-    // launcher set backend from the engine selection, but nativeContinuousOk() can
+    // launcher set backend from the engine selection, but resolvePoolEngine() can
     // demote a present-but-stale binary to wasm here.
     status.backend = useNative ? 'native' : 'wasm';
     status.backendNote = backendNote;
