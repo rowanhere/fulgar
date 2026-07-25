@@ -251,6 +251,43 @@ npm start
 
 > **Why `--autostash`?** Running `npm install` can modify `package-lock.json` on your machine — some of the build tooling ships different packages per operating system, so the file legitimately differs on Windows, Linux and macOS. That counts as a local change, so a plain `git pull` stops with *"Your local changes to the following files would be overwritten by merge: package-lock.json"*. `--autostash` sets that change aside, pulls, and puts it back. Nothing of yours is lost, and your settings (`.env.local`, `pools.json`) are never touched either way.
 
+## Getting maximum hashrate
+
+FulgurMiner ships deliberately polite defaults so it does not take over your
+machine. If you want every hash the box can produce, three things matter — in
+this order:
+
+**1. Run a current Node.** This is the biggest single lever and the one most
+people miss. The post-fork proof-of-work hash is plain JavaScript, so the
+JavaScript engine *is* the miner: on the same machine and the same settings,
+Node 24 measured about 16% slower than Node 26. Check yours with `node -v`, and
+if it is behind, install the current release from [nodejs.org](https://nodejs.org).
+
+**2. Run at 100% duty.** The default is 75%, which costs roughly 13-15%. Either
+pick **Mode → Smart: Max** (it goes to 100% and stays there), or set the
+throttle yourself:
+
+```bash
+MINER_THROTTLE=1 npm run mine
+```
+
+**3. Use every core.** By default the miner leaves one core free so your machine
+stays responsive, which costs about 4%. To use them all:
+
+```bash
+MINER_WORKERS=<number of cores> npm run mine
+```
+
+On a CPU with hyper-threading or SMT (most Intel i7/i9 and AMD Ryzen chips),
+setting workers to the number of **physical** cores usually beats setting it to
+the logical count — the threads end up fighting over the same execution units.
+Try both on your machine and keep the faster one.
+
+The miner prints its effective settings when it starts, and tells you when you
+are leaving speed on the table. If you chose **Considerate** mode it stays quiet
+about this on purpose: yielding to your other programs is the whole point of
+that mode.
+
 ## Native engine
 
 By default FulgurMiner uses a portable **wasm** engine that runs anywhere Node runs — zero setup. The **native** (Rust) engine was ~1.9× faster on the old Argon2id PoW; on **Sandglass v3** (the new PoW from block 33,550) the two are within ~5% (see [Performance](#performance)), so native is now an optional alternative rather than a meaningful speedup. Switch via the **Engine** setting (or `MINER_NATIVE=1`). On the next start FulgurMiner:
