@@ -81,10 +81,16 @@ export class HelperPool {
     return this.helpers[this.primaryIdx]!;
   }
 
-  /** Helper indices to try this round, starting at the current primary. */
-  private order(): number[] {
+  /** Helper indices to try this round, starting at the current primary; with a
+   *  `preferBase` (the helper whose tip claim we are chasing) that helper is
+   *  tried FIRST, then the usual rotation order, deduped. */
+  private order(preferBase?: string): number[] {
     const n = this.helpers.length;
-    return Array.from({ length: n }, (_, k) => (this.primaryIdx + k) % n);
+    const rotation = Array.from({ length: n }, (_, k) => (this.primaryIdx + k) % n);
+    if (preferBase === undefined) return rotation;
+    const p = this.helpers.indexOf(preferBase);
+    if (p < 0) return rotation;
+    return [p, ...rotation.filter((i) => i !== p)];
   }
 
   /** Record this round's primary outcome (exactly once per round) and rotate when
@@ -101,14 +107,16 @@ export class HelperPool {
 
   /** One failover round: try each helper once from the primary; first success wins.
    *  A caller AbortError propagates immediately (never retried/failed-over). */
-  private async round<T>(label: string, attempt: (base: string) => Promise<T>): Promise<T> {
+  private async round<T>(label: string, attempt: (base: string) => Promise<T>, preferBase?: string): Promise<T> {
     const errors: Array<{ base: string; error: Error }> = [];
-    const order = this.order(); // order[0] === primaryIdx
+    const order = this.order(preferBase); // order[0] === primaryIdx when no preferBase
     for (let k = 0; k < order.length; k++) {
       const base = this.helpers[order[k]!]!;
       try {
         const value = await attempt(base);
-        this.recordPrimary(k > 0); // primary failed iff a fallback (k>0) served the round
+        // A claimant-first round says nothing about the primary's health (the
+        // claimant, not the primary, leads it) — skip the bookkeeping entirely.
+        if (preferBase === undefined) this.recordPrimary(k > 0); // primary failed iff a fallback (k>0) served the round
         return value;
       } catch (e) {
         if ((e as Error)?.name === 'AbortError') throw e;
@@ -116,7 +124,7 @@ export class HelperPool {
         this.onDebug(`${label} via ${base} failed: ${(e as Error).message}`);
       }
     }
-    this.recordPrimary(true);
+    if (preferBase === undefined) this.recordPrimary(true);
     throw new AllHelpersFailed(errors);
   }
 
@@ -189,12 +197,14 @@ export class HelperPool {
     return { best: chosen!.tip, sourceBase: chosen!.base, views };
   }
 
-  /** Multi-round retry for block fetches; may rotate the primary mid-call (intentional — rotation is not call-scoped). */
-  async getBlocks(from: number, max = 200, signal?: AbortSignal): Promise<Block[]> {
+  /** Multi-round retry for block fetches; may rotate the primary mid-call (intentional — rotation is not call-scoped).
+   *  `preferBase` (the helper that claimed the tip we are chasing) is tried first,
+   *  so a tip from one helper is never chased through a different, staler one. */
+  async getBlocks(from: number, max = 200, signal?: AbortSignal, preferBase?: string): Promise<Block[]> {
     let lastErr: Error | undefined;
     for (let r = 0; r < this.blocksRounds; r++) {
       try {
-        return await this.round('blocks', (base) => this.getBlocksFn(base, from, max, signal, { attempts: 1, timeoutMs: this.blocksTimeoutMs }));
+        return await this.round('blocks', (base) => this.getBlocksFn(base, from, max, signal, { attempts: 1, timeoutMs: this.blocksTimeoutMs }), preferBase);
       } catch (e) {
         if ((e as Error)?.name === 'AbortError') throw e;
         lastErr = e as Error;

@@ -220,3 +220,48 @@ test('staleHelperWarnings ignores a 1-block propagation lag', () => {
   assert.equal(staleHelperWarnings(views, tip(13), B, staleBases).length, 0);
   assert.equal(staleBases.size, 0);
 });
+
+// ─── getBlocks preferBase: claimant-first ordering + error absorption ────────
+
+test('getBlocks with preferBase tries the claimant first, then rotation order', async () => {
+  const seen: string[] = [];
+  const pool = new HelperPool([A, B, C], {
+    ...sink, sleep: noSleep,
+    getBlocks: async (base) => { seen.push(base); if (base !== C) throw new Error('empty'); return ['blk' as any]; },
+  });
+  const out = await pool.getBlocks(5, 200, undefined, B);
+  assert.deepEqual(out, ['blk']);
+  assert.deepEqual(seen, [B, A, C]); // claimant B first, then rotation A, C — deduped
+});
+
+test('a throwing claimant is absorbed and the round falls through to the next helper', async () => {
+  // The per-helper error-absorb contract: a claimant whose /blocks response
+  // throws (HTTP failure or a decodeBlockHex reject) must fail over exactly
+  // like any helper — never propagate out of a round that another helper can serve.
+  const pool = new HelperPool([A, B], {
+    ...sink, sleep: noSleep,
+    getBlocks: async (base) => { if (base === B) throw new Error('oversized block hex'); return ['ok' as any]; },
+  });
+  assert.deepEqual(await pool.getBlocks(1, 200, undefined, B), ['ok']);
+});
+
+test('an unknown preferBase falls back to plain rotation order', async () => {
+  const seen: string[] = [];
+  const pool = new HelperPool([A, B], {
+    ...sink, sleep: noSleep,
+    getBlocks: async (base) => { seen.push(base); return ['x' as any]; },
+  });
+  await pool.getBlocks(1, 200, undefined, 'https://not-in-list.example');
+  assert.deepEqual(seen, [A]);
+});
+
+test('a preferBase round does not touch primary rotation bookkeeping', async () => {
+  const pool = new HelperPool([A, B], {
+    ...sink, sleep: noSleep, rotateThreshold: 1,
+    getBlocks: async (base) => { if (base === A) throw new Error('down'); return ['x' as any]; },
+  });
+  // Primary A fails inside a claimant-first round — with rotateThreshold 1 a
+  // counted failure would rotate immediately. It must not.
+  await pool.getBlocks(1, 200, undefined, B);
+  assert.equal(pool.primary(), A);
+});
