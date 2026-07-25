@@ -211,7 +211,12 @@ async function runDashboardSession(warm?: WarmChain): Promise<{ reason: 'menu' |
 }
 
 /** Run one plain (no-TUI) mining session to completion / Ctrl+C. */
-async function runPlainSession(): Promise<void> {
+/** `warm` carries an already-synced solo chain across a mid-session switch to
+ *  plain mode. Without it the terminal-lost fallback throws away a chain this
+ *  process already verified and cold-starts a full replay — minutes of downtime
+ *  for exactly the failure this path exists to survive. Pool mode holds no
+ *  chain, so it is solo-only by nature. */
+async function runPlainSession(warm?: WarmChain): Promise<void> {
   const cfg = loadConfig();
   const status = buildStatus(cfg);
   const reporter: MinerReporter = new ConsoleReporter();
@@ -227,7 +232,7 @@ async function runPlainSession(): Promise<void> {
     if (cfg.poolUrl) {
       await runPoolClient(cfg.poolUrl, cfg.minerPubkeyHex, cfg.workers, cfg.throttle, reporter, undefined, status, cfg.smart);
     } else {
-      await runMiner(cfg, reporter);
+      await runMiner(cfg, reporter, undefined, warm);
     }
   } finally {
     reporter.close?.();
@@ -323,7 +328,9 @@ async function main(): Promise<void> {
         // we don't bounce back to the dashboard on a terminal we know is broken.
         process.env.FULGUR_TUI = '0';
         console.log("\n  The live dashboard isn't supported by this terminal — switching to plain text mode.\n");
-        await runPlainSession();
+        // Hand the synced chain over: this process already verified it, and the
+        // whole point of the fallback is to keep mining through a broken console.
+        await runPlainSession(warm);
         return;
       }
       // reason === 'menu' → loop back to the arrow menu (settings).

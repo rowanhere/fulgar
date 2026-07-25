@@ -186,3 +186,29 @@ test('unreadable files never crash and never invent load', () => {
     d.cpuIdleFraction();
   });
 });
+
+test('idleFractionFromCpuDeltas HOLDS (null) when one core reads BACKWARDS while another advances', () => {
+  // The real failure needs two cores: a single backwards core makes the summed
+  // total non-positive, which the old code already rejected. But a backwards
+  // core ALONGSIDE a busy one leaves total > 0 with the idle sum intact, so the
+  // ratio exceeds 1 - a box reading as MORE than fully idle, which is exactly
+  // when Considerate must not ramp up. cpu hot-plug / a core going offline and
+  // returning / a host counter reset all produce this.
+  const prev = [
+    { user: 100, nice: 0, sys: 0, idle: 1000, irq: 0 }, // core A
+    { user: 0, nice: 0, sys: 0, idle: 1000, irq: 0 },   // core B
+  ];
+  const next = [
+    { user: 0, nice: 0, sys: 0, idle: 1000, irq: 0 },   // A: user counter went BACKWARDS
+    { user: 0, nice: 0, sys: 0, idle: 1200, irq: 0 },   // B: advanced normally
+  ];
+  // Pre-fix this summed to idle=200 / total=100 => 2.0, a nonsensical fraction.
+  assert.equal(idleFractionFromCpuDeltas(prev, next), null);
+});
+
+test('idleFractionFromCpuDeltas still computes normally on forward counters', () => {
+  const prev = [{ user: 100, nice: 0, sys: 50, idle: 1000, irq: 0 }];
+  const next = [{ user: 110, nice: 0, sys: 50, idle: 1090, irq: 0 }];
+  // 90 idle of 100 total
+  assert.equal(idleFractionFromCpuDeltas(prev, next), 0.9);
+});

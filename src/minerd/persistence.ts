@@ -191,6 +191,21 @@ export function restoreSnapshot(chain: Blockchain, debug?: (msg: string) => void
       return discard(chain, note, 'malformed');
     }
 
+    // The prefix is heights 1..anchor inclusive, so its length is exactly the
+    // anchor height. Checking that BEFORE the decode loop turns an unbounded
+    // "decode every entry, then look at the anchor" into a cheap O(1) rejection
+    // of a truncated/padded/corrupt file, and bounds the allocation by the
+    // file's own declared height. anchorHeight itself is only known to be a
+    // `number` at this point — NaN, negative and fractional all reach here.
+    if (!Number.isInteger(parsed.anchorHeight) || parsed.anchorHeight < 1) {
+      note('anchor height is not a positive integer — discarding');
+      return discard(chain, note, 'malformed');
+    }
+    if (parsed.blocksHex.length !== parsed.anchorHeight) {
+      note(`prefix length ${parsed.blocksHex.length} does not match anchor height ${parsed.anchorHeight} — discarding`);
+      return discard(chain, note, 'malformed');
+    }
+
     // --- rebuild + seed the finalized prefix, anchor last ----------------
     // blocksHex is oldest-first (height 1..anchor). Each prefix block is seeded
     // with `null` state (cheap — no clone+apply); the LAST block is the anchor and

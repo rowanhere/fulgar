@@ -25,6 +25,7 @@
 // classic pool path (GrindPool or NativeGrindPool via the shared poolEngine
 // gate, continuous share mode) with the same adaptive throttle wiring.
 import { Blockchain } from '../chain/blockchain.js';
+import os from 'node:os';
 import {
   computeTxRoot, encodeBlock, encodeHeader, type Block, type BlockHeader,
 } from '../chain/block.js';
@@ -619,6 +620,14 @@ export async function runNegotiatedPoolClient(
   // Write one immediately so the very next launch is warm even if this process
   // dies early (subject to a finalized anchor existing — short chains skip).
   maybeSave();
+
+  // Considerate's whole job is to get out of your way, so it also grinds at a lower
+  // scheduling priority (solo and the classic pool path have always done this; the
+  // negotiated path was the odd one out). Manual and Max are NOT niced: a user who
+  // asked for a fixed rate or for full tilt did not ask to lose scheduler races.
+  if (smart === 'considerate') {
+    try { os.setPriority(10); } catch { /* not permitted on some platforms — ignore */ }
+  }
 
   const grind: GrindPool | NativeGrindPool = engine.useNative
     ? new NativeGrindPool(workers, startDuty)

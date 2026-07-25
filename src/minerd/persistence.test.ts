@@ -145,3 +145,26 @@ test('restoreSnapshot: a v1 (pre-bump) schema is discarded outright', { timeout:
     assert.equal(outcome.restored, false, 'v1 schema must be rejected by the v2 gate');
   });
 });
+
+test('restoreSnapshot: a prefix whose length disagrees with anchorHeight is discarded', { timeout: 120_000 }, async () => {
+  // blocksHex is heights 1..anchor inclusive, so length === anchorHeight always.
+  // NOTE: this outcome held before the length pre-check too (the anchor-height
+  // comparison caught it AFTER decoding every entry). The pre-check turns an
+  // unbounded decode-then-reject into an O(1) rejection; this test pins the
+  // OUTCOME so neither path can regress it.
+  await withTempHome(async () => {
+    await makeAnchorSnapshot((snap) => { snap.anchorHeight = 5; }); // still one block
+    const outcome = restoreSnapshot(new Blockchain());
+    assert.equal(outcome.restored, false, 'prefix length must match the declared anchor height');
+  });
+});
+
+test('restoreSnapshot: a non-integer anchorHeight is discarded', { timeout: 120_000 }, async () => {
+  // typeof x === 'number' admits NaN, negatives and fractions. Also already
+  // rejected pre-check (via the height comparison); pinned so it stays rejected.
+  await withTempHome(async () => {
+    await makeAnchorSnapshot((snap) => { snap.anchorHeight = 1.5; });
+    const outcome = restoreSnapshot(new Blockchain());
+    assert.equal(outcome.restored, false, 'a fractional anchor height must be rejected');
+  });
+});
