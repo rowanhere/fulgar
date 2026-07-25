@@ -33,7 +33,7 @@ FulgurMiner is a standalone command-line miner for [BrowserCoin](https://browser
 
 ### Performance
 
-At **block 33,550** BrowserCoin switches its proof-of-work from Argon2id to **Sandglass v3** — a memory-*latency*-bound hash (a long serial pointer-chase through a small buffer). On the old Argon2id PoW the native Rust core ran ~1.9× the WASM engine; on Sandglass that edge disappears, because the work is spent *waiting on memory*, not computing — so **the native Rust core and the portable WASM engine land within ~5% of each other.** Measured on an **Apple M5 (10 cores)** at full tilt:
+At **block 33,550** BrowserCoin switches its proof-of-work from Argon2id to **Sandglass v3** — a memory-*latency*-bound hash (a long serial pointer-chase through a small buffer). On the old Argon2id PoW the native Rust core ran ~1.9× the WASM engine; on Sandglass that edge disappears, because the work is spent *waiting on memory*, not computing — so on Apple silicon **the native Rust core and the portable WASM engine land within ~5% of each other.** Measured on an **Apple M5 (10 cores)** at full tilt:
 
 <p align="center">
   <img src="assets/perf-sandglass.svg" width="720" alt="Sandglass v3 hash rate by CPU workers: FulgurMiner native vs WASM, on an Apple M5">
@@ -75,7 +75,7 @@ This is the **Windows** walkthrough; macOS/Linux is the same idea (open Terminal
 5. Type `npm install` and press Enter.
 6. Type `npm start` and press Enter. The miner opens — paste your **wallet address**, choose your settings, highlight **Start mining** and press Enter. It runs the portable **wasm** engine.
 
-**Optional — build the "native" (Rust) engine** *(optional: a real speedup on the old Argon2id PoW; on Sandglass v3 it's within ~5% of the default engine — see [Performance](#performance))***:**
+**Optional — build the "native" (Rust) engine** *(optional: a real speedup on the old Argon2id PoW; on Sandglass v3 it's worth ~10-20% on x86 once you use most of your cores, and within ~5% on Apple silicon — see [Performance](#performance))***:**
 
 7. Install **Rust** from [rustup.rs](https://rustup.rs): download and run `rustup-init.exe`, type **1** and press Enter. It installs the **Visual Studio build tools** (accept that), then finishes Rust. *(macOS: if the build later complains about a missing linker, run `xcode-select --install`.)*
 8. **Close the terminal and open a new one** in the FulgurMiner folder. **This step matters** — only a freshly opened terminal sees Rust on your PATH.
@@ -283,6 +283,15 @@ setting workers to the number of **physical** cores usually beats setting it to
 the logical count — the threads end up fighting over the same execution units.
 Try both on your machine and keep the faster one.
 
+**4. On an x86 machine, build the native engine.** It is worth real hashrate
+once you are using most of your cores. Measured on a 16-core AMD EPYC (Zen 4),
+at 100% duty and a current Node: **+20% at 8 workers and +10% at 16** over the
+default engine — but *slower* by a few percent at 1-2 workers, so it only pays
+off under load. The gain comes from a memory prefetch that exists only on x86,
+so **Apple silicon gets nothing from it** — there the two engines are within
+about 5%, and the default engine is the simpler choice. See
+[Native engine](#native-engine) for the build.
+
 The miner prints its effective settings every time it starts, so you can always
 see the duty cycle and worker count it is actually using.
 
@@ -295,7 +304,7 @@ whichever mode you pick.
 
 ## Native engine
 
-By default FulgurMiner uses a portable **wasm** engine that runs anywhere Node runs — zero setup. The **native** (Rust) engine was ~1.9× faster on the old Argon2id PoW; on **Sandglass v3** (the new PoW from block 33,550) the two are within ~5% (see [Performance](#performance)), so native is now an optional alternative rather than a meaningful speedup. Switch via the **Engine** setting (or `MINER_NATIVE=1`). On the next start FulgurMiner:
+By default FulgurMiner uses a portable engine that runs anywhere Node runs — zero setup. The **native** (Rust) engine was ~1.9× faster on the old Argon2id PoW. On **Sandglass v3** (the new PoW from block 33,550) how much it buys you depends on your CPU: on **Apple silicon** the two are within ~5% (see [Performance](#performance)), but on **x86** native is meaningfully faster once you use most of your cores — measured **+20% at 8 workers and +10% at 16** on a 16-core AMD EPYC (Zen 4), because it uses a memory prefetch that only exists on x86. At 1-2 workers it is slightly slower either way. Switch via the **Engine** setting (or `MINER_NATIVE=1`). On the next start FulgurMiner:
 
 - uses the built engine if it's already there;
 - offers to **build it now** (a one-time `cargo build --release`, ~a minute) if you have the [Rust toolchain](https://rustup.rs);
