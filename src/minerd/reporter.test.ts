@@ -97,3 +97,23 @@ test('ConsoleReporter status line is always ASCII-only (no SGR/unicode) in smart
     }
   }
 });
+
+// ─── network-tip visibility (net=) ──────────────────────────────────────────
+
+test('ConsoleReporter renders net= only when the network tip differs from local', () => {
+  const r = new ConsoleReporter();
+  r.chain(100, 'ff', 103);
+  let out = captureStdout(() => r.hashrate(50));
+  assert.ok(out.includes('h=100 net=103'), `expected "h=100 net=103" in: ${JSON.stringify(out)}`);
+  assert.ok(isAsciiOnly(out));
+  r.chain(103, 'ff', 103);
+  out = captureStdout(() => r.hashrate(50));
+  assert.ok(!out.includes('net='), `no net= when in sync: ${JSON.stringify(out)}`);
+});
+
+test('ConsoleReporter omits net= when netHeight is not provided (back-compat)', () => {
+  const r = new ConsoleReporter();
+  r.chain(100, 'ff');
+  const out = captureStdout(() => r.hashrate(50));
+  assert.ok(out.includes('h=100 ') && !out.includes('net='));
+});

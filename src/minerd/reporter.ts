@@ -108,8 +108,10 @@ export interface MinerReporter {
   synced(height: number): void;
   /** Called ~1×/sec with the number of hashes in the last window. */
   hashrate(hps: number): void;
-  /** Latest chain tip height + difficulty (hex). */
-  chain(height: number, difficultyHex: string): void;
+  /** Latest chain tip height + difficulty (hex). `netHeight` (optional) is the
+   *  best-known NETWORK height from the helper poll — reporters show it only
+   *  when it differs from `height`, so a lagging local chain is visible. */
+  chain(height: number, difficultyHex: string, netHeight?: number): void;
   /** A solo block was found and submitted. */
   found(info: FoundInfo): void;
   /** A pool share result came back. */
@@ -147,6 +149,7 @@ export interface MinerReporter {
  */
 export class ConsoleReporter implements MinerReporter {
   private height = 0;
+  private netHeight?: number;
   private difficultyHex = '0';
   private status_: ReporterStatus | null = null;
   // Sync-progress throttling: emit at most ~1/sec or on a ≥2% jump so plain logs
@@ -227,13 +230,15 @@ export class ConsoleReporter implements MinerReporter {
     if (this.status_?.mode === 'pool') {
       process.stdout.write(`\r[pool-miner] ${hps} H/s${smartSuffix}   `);
     } else {
-      process.stdout.write(`\r[minerd] h=${this.height} diff=${this.difficultyHex} hps:${hps}${smartSuffix}   `);
+      const net = this.netHeight !== undefined && this.netHeight !== this.height ? ` net=${this.netHeight}` : '';
+      process.stdout.write(`\r[minerd] h=${this.height}${net} diff=${this.difficultyHex} hps:${hps}${smartSuffix}   `);
     }
   }
 
-  chain(height: number, difficultyHex: string): void {
+  chain(height: number, difficultyHex: string, netHeight?: number): void {
     this.height = height;
     this.difficultyHex = difficultyHex;
+    this.netHeight = netHeight;
   }
 
   found(info: FoundInfo): void {

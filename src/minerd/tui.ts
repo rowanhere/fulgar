@@ -102,6 +102,7 @@ export class DashboardReporter implements MinerReporter {
   private syncCurrent = 0;
   private syncTarget = 0;
   private height = 0;
+  private netHeight?: number;
   private difficultyHex = '0';
   private latestHps = 0;
   private peakHps = 0;
@@ -293,9 +294,10 @@ export class DashboardReporter implements MinerReporter {
     if (this.spark.length > SPARK_RING) this.spark.splice(0, this.spark.length - SPARK_RING);
   }
 
-  chain(height: number, difficultyHex: string): void {
+  chain(height: number, difficultyHex: string, netHeight?: number): void {
     this.height = height;
     this.difficultyHex = difficultyHex;
+    this.netHeight = netHeight;
   }
 
   found(info: FoundInfo): void {
@@ -763,7 +765,8 @@ export class DashboardReporter implements MinerReporter {
       out.push(`${DIM}fnd  ${RESET}${group(this.foundCount)} ${DIM}(${group(this.acceptedCount)}✓ ${group(this.rejectedCount)}✗)${RESET}`);
     }
     out.push(`${DIM}work ${RESET}${compact(this.totalHashes)}`);
-    out.push(`${DIM}hgt  ${RESET}${group(this.height)} ${DIM}diff ${this.difficultyHex}${RESET}`);
+    const net = this.netHeight !== undefined && this.netHeight !== this.height ? ` ${DIM}net  ${RESET}${group(this.netHeight)}` : '';
+    out.push(`${DIM}hgt  ${RESET}${group(this.height)}${net} ${DIM}diff ${this.difficultyHex}${RESET}`);
     return out;
   }
 
@@ -838,7 +841,8 @@ export class DashboardReporter implements MinerReporter {
     } else {
       lines.push(`${DIM}fnd ${RESET}${group(this.foundCount)}`);
     }
-    lines.push(`${DIM}hgt ${RESET}${group(this.height)}`);
+    const netNarrow = this.netHeight !== undefined && this.netHeight !== this.height ? ` ${DIM}net ${RESET}${group(this.netHeight)}` : '';
+    lines.push(`${DIM}hgt ${RESET}${group(this.height)}${netNarrow}`);
     if (this.updateNotice_ && this.updateNoticeText(this.updateNotice_)) {
       const color = this.updateNotice_.mustUpdate ? RED : YELLOW;
       lines.push(this.clampVisible(`${color}${this.updateNoticeText(this.updateNotice_)}${RESET}`, cols));
