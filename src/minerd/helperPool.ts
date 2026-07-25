@@ -166,8 +166,11 @@ export class HelperPool {
       }
     }
     if (views.length === 0) {
+      // Same rule as the partial-failure path below: a round that learned
+      // nothing must not CLEAR the staleness streak, or a primary alternating
+      // stale answers with all-helpers-down rounds resets one counter with each
+      // event and never reaches either threshold.
       this.recordPrimary(true);
-      this.primaryStale = 0;
       throw new AllHelpersFailed(errors);
     }
     const bestHeight = Math.max(...views.map((v) => v.tip.height));

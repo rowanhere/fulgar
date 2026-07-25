@@ -287,24 +287,39 @@ test('a primary alternating hard-failure and stale answers still rotates (no cou
 });
 
 test('a hard-failure rotation does not hand the new primary its predecessor stale streak', async () => {
-  const helpers = [A, B, C];
-  let aStale = true;
-  const pool = new HelperPool(helpers, {
+  // The rotation must be driven through getTip(), NOT getBestTip(): the transfer
+  // only happened on rotations originating in the ordinary round() callers
+  // (getTip / blockAt / non-preferred getBlocks), which never touched primaryStale.
+  let aDown = false;
+  const pool = new HelperPool([A, B, C], {
     ...sink, sleep: noSleep, rotateThreshold: 1,
     getTip: async (base) => {
-      if (base === A) {
-        if (aStale) return tip(10); // stale answer, accrues primaryStale
-        throw new Error('down');    // then hard-fails → rotates to B
-      }
-      return base === B ? tip(10) : tip(20); // B is also stale; C is best
+      if (base === A && aDown) throw new Error('down');
+      return base === C ? tip(20) : tip(10); // A and B stale; C is best
     },
   });
   await pool.getBestTip();
   await pool.getBestTip(); // primaryStale = 2 on A
   assert.equal(pool.primary(), A);
-  aStale = false;
-  await pool.getBestTip(); // A hard-fails, rotateThreshold 1 → rotate to B
+  aDown = true;
+  await pool.getTip();     // ordinary round: A fails, rotateThreshold 1 → rotate to B
   assert.equal(pool.primary(), B);
   await pool.getBestTip(); // B answers stale ONCE — must not be handed off yet
   assert.equal(pool.primary(), B, 'new primary starts its own staleness streak');
+});
+
+test('an all-helpers-down round does not clear the stale streak (alternating stale/outage still rotates)', async () => {
+  let allDown = false;
+  const pool = new HelperPool([A, B], {
+    ...sink, sleep: noSleep,
+    getTip: async (base) => {
+      if (allDown) throw new Error('outage');
+      return base === A ? tip(10) : tip(20); // A stale, B best
+    },
+  });
+  for (let i = 0; i < 8 && pool.primary() === A; i++) {
+    await pool.getBestTip().catch(() => {}); // alternate: stale round, then a total outage
+    allDown = !allDown;
+  }
+  assert.equal(pool.primary(), B, 'outage rounds must not reset the streak accrued by stale answers');
 });

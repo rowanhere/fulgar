@@ -480,11 +480,18 @@ export async function runMiner(
       );
     }
 
-    // Learn the target tip height up front so sync progress has a denominator. A
-    // failed tip read just yields an indeterminate target (still reported).
+    // Learn the target tip height up front so sync progress has a denominator.
+    // Poll EVERY helper (not primary-first): the cold sync must chase the BEST
+    // claim through the helper that made it, or a stale primary answering an
+    // empty/short /blocks ends the bootstrap early and we declare a chain the
+    // network left behind "synced". A failed round yields an indeterminate
+    // target and no claimant (primary-first, as before).
     let targetHeight = 0;
+    let syncSource: string | undefined;
     try {
-      targetHeight = (await helperPool.getTip()).height;
+      const best = await helperPool.getBestTip();
+      targetHeight = best.best.height;
+      syncSource = best.sourceBase;
     } catch (e) {
       targetHeight = 0;
       reporter.event(
@@ -495,11 +502,11 @@ export async function runMiner(
     reporter.event(
       'info',
       targetHeight > 0
-        ? `[minerd] syncing chain from ${helperPool.primary()} (target height ${targetHeight.toLocaleString('en-US')})…`
+        ? `[minerd] syncing chain from ${syncSource ?? helperPool.primary()} (target height ${targetHeight.toLocaleString('en-US')})…`
         : `[minerd] syncing chain from ${helperPool.primary()}…`,
     );
     try {
-      await sync.bootstrap((h) => reporter.syncProgress(h, targetHeight));
+      await sync.bootstrap((h) => reporter.syncProgress(h, targetHeight), syncSource);
     } catch (e) {
       // An abort during bootstrap disposes the verifier pool, rejecting the
       // in-flight verify() and unwinding here. Intentional shutdown — tear down
@@ -541,7 +548,7 @@ export async function runMiner(
         snapshotInvalidated = false;
         reporter.event('info', `[minerd] re-syncing BrowserCoin chain from genesis…`);
         try {
-          await sync.bootstrap((h) => reporter.syncProgress(h, targetHeight));
+          await sync.bootstrap((h) => reporter.syncProgress(h, targetHeight), syncSource);
         } catch (e) {
           if (signal?.aborted) {
             terminateVerifier();
