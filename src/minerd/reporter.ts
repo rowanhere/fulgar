@@ -177,7 +177,14 @@ export class ConsoleReporter implements MinerReporter {
   status(s: ReporterStatus): void {
     this.status_ = s;
     if (s.backendNote) console.log(`[${s.mode === 'pool' ? 'pool-miner' : 'minerd'}] ${s.backendNote}`);
-    if (s.mode === 'pool') return; // pool registration line is emitted by poolClient flow
+    if (s.mode === 'pool') {
+      // Pool + negotiated printed NOTHING about the effective configuration in
+      // plain mode - the silence that hid a 0.75 duty from headless users (and
+      // produced a wrong conclusion in the 2026-07-24 measurement session). The
+      // registration/engine lines are emitted separately by the pool clients.
+      console.log(`[pool-miner] mining with ${s.workers} workers, throttle ${s.throttle}`);
+      return;
+    }
     const backend = s.backend === 'native' ? 'native (Rust)' : 'wasm (worker_threads)';
     // Mirror miner.ts's old startup lines so plain mode looks unchanged.
     console.log(`[minerd] mining to ${s.address.slice(0, 16)}… (${s.workers} workers, throttle ${s.throttle})`);

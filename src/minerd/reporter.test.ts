@@ -126,3 +126,45 @@ test('ConsoleReporter omits net= when the local chain is AHEAD of the observed n
   const out = captureStdout(() => r.hashrate(50));
   assert.ok(out.includes('h=205 ') && !out.includes('net='), `unexpected net= while ahead: ${JSON.stringify(out)}`);
 });
+
+// ─── effective-config line in every mode ────────────────────────────────────
+
+test('ConsoleReporter prints the effective config in POOL mode (was silent)', () => {
+  const r = new ConsoleReporter();
+  const logged: string[] = [];
+  const orig = console.log;
+  console.log = (s?: unknown) => { logged.push(String(s)); };
+  try {
+    r.status({ mode: 'pool', target: 'FulgurPool', backend: 'wasm', workers: 4, throttle: 0.75, address: 'a'.repeat(64) });
+  } finally { console.log = orig; }
+  const line = logged.find((l) => l.includes('mining with'));
+  assert.ok(line, `expected a config line, got: ${JSON.stringify(logged)}`);
+  assert.match(line!, /\[pool-miner\] mining with 4 workers, throttle 0\.75/);
+  assert.ok(isAsciiOnly(line!), `config line must be ASCII-only: ${JSON.stringify(line)}`);
+});
+
+test('ConsoleReporter solo config line is unchanged', () => {
+  const r = new ConsoleReporter();
+  const logged: string[] = [];
+  const orig = console.log;
+  console.log = (s?: unknown) => { logged.push(String(s)); };
+  try {
+    r.status({ mode: 'solo', target: 'solo', backend: 'wasm', workers: 9, throttle: 1, address: 'b'.repeat(64) });
+  } finally { console.log = orig; }
+  assert.ok(logged.some((l) => /\[minerd\] mining to b{16}… \(9 workers, throttle 1\)/.test(l)), JSON.stringify(logged));
+  assert.ok(logged.some((l) => l.includes('grind backend: wasm (worker_threads)')), JSON.stringify(logged));
+});
+
+test('ConsoleReporter still prints a backendNote ahead of the config line in pool mode', () => {
+  const r = new ConsoleReporter();
+  const logged: string[] = [];
+  const orig = console.log;
+  console.log = (s?: unknown) => { logged.push(String(s)); };
+  try {
+    r.status({ mode: 'pool', target: 'p', backend: 'wasm', backendNote: 'native not built - install Rust', workers: 2, throttle: 1, address: 'c'.repeat(64) });
+  } finally { console.log = orig; }
+  const noteIdx = logged.findIndex((l) => l.includes('native not built'));
+  const cfgIdx = logged.findIndex((l) => l.includes('mining with'));
+  assert.ok(noteIdx >= 0 && cfgIdx >= 0, JSON.stringify(logged));
+  assert.ok(noteIdx < cfgIdx, `backendNote must come first: ${JSON.stringify(logged)}`);
+});
