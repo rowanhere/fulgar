@@ -102,6 +102,20 @@ test('perfHints stays silent on nonsensical numeric input instead of advising no
   assert.deepEqual(perfHints({ ...maxed, workers: Number.NaN }), [], 'NaN workers');
   assert.deepEqual(perfHints({ ...maxed, throttle: 1.5 }), [], 'duty above 1 is not "slow"');
   assert.deepEqual(perfHints({ ...maxed, workers: 12 }), [], 'more workers than cores is not "spare"');
+  // A duty that rounds to 0% would render the meaningless "running at 0% duty".
+  assert.deepEqual(perfHints({ ...maxed, throttle: 0.001 }), [], 'duty rounding to 0%');
+  // Resolved worker counts are always whole; a fractional one would render
+  // "running on 1.5 of 10 cores".
+  assert.deepEqual(perfHints({ ...maxed, workers: 1.5 }), [], 'fractional workers');
+  assert.deepEqual(perfHints({ ...maxed, workers: 2, usableCores: 10.5 }), [], 'fractional core allowance');
+});
+
+test('a small-but-renderable duty still gets honest advice', () => {
+  // The gate is the RENDERED percentage, not config's 0.05 floor: 3% is
+  // unusual but truthful, so it must still be advised rather than swallowed.
+  const out = perfHints({ ...maxed, throttle: 0.03 });
+  assert.equal(out.length, 1);
+  assert.match(out[0]!, /3% duty/);
 });
 
 test('nodeMajorOf parses a version string and survives junk', () => {

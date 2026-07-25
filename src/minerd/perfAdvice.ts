@@ -51,11 +51,14 @@ export function perfHints(i: PerfInputs): string[] {
 
   if (i.smart === 'off') {
     // Guard the exported seam against values production never produces (config
-    // resolution clamps both): a negative duty would render "-50% duty", and a
-    // negative worker count "-1 of 1 cores". Advice built on nonsense is worse
-    // than silence.
-    const dutyOk = Number.isFinite(i.throttle) && i.throttle > 0;
-    const coresOk = Number.isFinite(i.workers) && i.workers > 0 && Number.isFinite(i.usableCores);
+    // resolution clamps the duty to >= 0.05 and resolves whole workers): a
+    // negative duty renders "-50% duty", a duty under 0.005 rounds to the
+    // meaningless "0% duty", and a fractional worker count renders "1.5 of 10
+    // cores". Advice built on nonsense is worse than silence. The duty gate is
+    // the RENDERED percentage rather than config's 0.05 floor, so a hand-built
+    // 0.03 still gets honest "3% duty" advice.
+    const dutyOk = Number.isFinite(i.throttle) && Math.round(i.throttle * 100) >= 1;
+    const coresOk = Number.isInteger(i.workers) && i.workers > 0 && Number.isInteger(i.usableCores) && i.usableCores > 0;
     const slowDuty = dutyOk && i.throttle < 1;
     const spareCores = coresOk && i.workers < i.usableCores;
     if (slowDuty || spareCores) {
