@@ -30,9 +30,11 @@ export interface PerfInputs {
   nodeMajor: number;
 }
 
-/** Major version number from a `process.versions.node`-style string; 0 if unparseable. */
+/** Major version number from a `process.versions.node`-style string; 0 if
+ *  unparseable. The major must be followed by a dot or the end of the string,
+ *  so junk like '24garbage' yields 0 rather than a confident, wrong "Node 24". */
 export function nodeMajorOf(version: string): number {
-  const m = /^v?(\d+)/.exec(version);
+  const m = /^v?(\d+)(?:\.|$)/.exec(version);
   return m ? Number(m[1]) : 0;
 }
 
@@ -48,8 +50,14 @@ export function perfHints(i: PerfInputs): string[] {
   const hints: string[] = [];
 
   if (i.smart === 'off') {
-    const slowDuty = i.throttle < 1;
-    const spareCores = i.workers < i.usableCores;
+    // Guard the exported seam against values production never produces (config
+    // resolution clamps both): a negative duty would render "-50% duty", and a
+    // negative worker count "-1 of 1 cores". Advice built on nonsense is worse
+    // than silence.
+    const dutyOk = Number.isFinite(i.throttle) && i.throttle > 0;
+    const coresOk = Number.isFinite(i.workers) && i.workers > 0 && Number.isFinite(i.usableCores);
+    const slowDuty = dutyOk && i.throttle < 1;
+    const spareCores = coresOk && i.workers < i.usableCores;
     if (slowDuty || spareCores) {
       const pct = Math.round(i.throttle * 100);
       const state = slowDuty && spareCores
@@ -59,12 +67,20 @@ export function perfHints(i: PerfInputs): string[] {
           : `running on ${i.workers} of ${i.usableCores} cores`;
       // Name each lever BOTH ways: a headless `npm run mine` user has no menu,
       // and a TUI user does not think in environment variables.
+      //
+      // The worker remedy is "try ... up to N", never "N is the maximum":
+      // usableCores counts LOGICAL cpus, and on an SMT/hyper-threaded box the
+      // physical-core count usually mines faster (the threads contend for the
+      // same execution units). Node cannot portably read the physical count, so
+      // promising that the logical count is "full speed" would contradict our
+      // own README advice on exactly the machines where it matters most.
+      const workerFix = `try Workers up to ${i.usableCores} (MINER_WORKERS=${i.usableCores})`;
       const fix = slowDuty && spareCores
-        ? `set Throttle to 100% (MINER_THROTTLE=1) and Workers to ${i.usableCores} (MINER_WORKERS=${i.usableCores})`
+        ? `set Throttle to 100% (MINER_THROTTLE=1) and ${workerFix}`
         : slowDuty
           ? 'set Throttle to 100% (MINER_THROTTLE=1)'
-          : `set Workers to ${i.usableCores} (MINER_WORKERS=${i.usableCores})`;
-      hints.push(`[perf] ${state} - for full speed ${fix}`);
+          : workerFix;
+      hints.push(`[perf] ${state} - for more speed ${fix}`);
     }
   }
 

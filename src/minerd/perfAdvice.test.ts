@@ -68,12 +68,40 @@ test('perfHints stays silent on a NEWER Node than the pinned floor', () => {
   assert.deepEqual(perfHints({ ...maxed, nodeMajor: PERF_NODE_MAJOR + 4 }), []);
 });
 
-test('every hint is ASCII-only (ConsoleReporter invariant: no em-dash, no SGR, no unicode)', () => {
-  const out = perfHints({ ...maxed, throttle: 0.75, workers: 9, nodeMajor: PERF_NODE_MAJOR - 2 });
-  assert.equal(out.length, 2);
-  for (const line of out) {
-    assert.ok(/^[\r\n\t\x20-\x7e]*$/.test(line), `not ASCII-only: ${JSON.stringify(line)}`);
+test('EVERY hint variant is ASCII-only (ConsoleReporter invariant: no em-dash, no SGR, no unicode)', () => {
+  // Cover all three config phrasings plus the Node hint - an em-dash slipping
+  // into the duty-only or workers-only branch would corrupt piped logs.
+  const variants: PerfInputs[] = [
+    { ...maxed, throttle: 0.75, workers: 9, nodeMajor: PERF_NODE_MAJOR - 2 }, // both + node
+    { ...maxed, throttle: 0.5 },                                              // duty only
+    { ...maxed, workers: 6 },                                                 // workers only
+  ];
+  let seen = 0;
+  for (const v of variants) {
+    for (const line of perfHints(v)) {
+      seen++;
+      assert.ok(/^[\r\n\t\x20-\x7e]*$/.test(line), `not ASCII-only: ${JSON.stringify(line)}`);
+    }
   }
+  assert.equal(seen, 4, 'expected 4 lines across the variants (both+node, duty, workers)');
+});
+
+test('the worker remedy is phrased as something to TRY, not a guaranteed maximum', () => {
+  // usableCores counts LOGICAL cpus; on an SMT box the physical count often
+  // mines faster, so promising "full speed" would contradict the README.
+  const out = perfHints({ ...maxed, workers: 4 });
+  assert.match(out[0]!, /try Workers up to 10/);
+  assert.ok(!/full speed/.test(out[0]!), `must not promise full speed: ${out[0]}`);
+});
+
+test('perfHints stays silent on nonsensical numeric input instead of advising nonsense', () => {
+  // Production clamps these, but the seam is exported.
+  assert.deepEqual(perfHints({ ...maxed, throttle: -0.5 }), [], 'negative duty');
+  assert.deepEqual(perfHints({ ...maxed, workers: -1, usableCores: 1 }), [], 'negative workers');
+  assert.deepEqual(perfHints({ ...maxed, throttle: Number.NaN }), [], 'NaN duty');
+  assert.deepEqual(perfHints({ ...maxed, workers: Number.NaN }), [], 'NaN workers');
+  assert.deepEqual(perfHints({ ...maxed, throttle: 1.5 }), [], 'duty above 1 is not "slow"');
+  assert.deepEqual(perfHints({ ...maxed, workers: 12 }), [], 'more workers than cores is not "spare"');
 });
 
 test('nodeMajorOf parses a version string and survives junk', () => {
@@ -82,6 +110,10 @@ test('nodeMajorOf parses a version string and survives junk', () => {
   assert.equal(nodeMajorOf('v22.1.0'), 22); // tolerate a leading v
   assert.equal(nodeMajorOf(''), 0);         // unparseable -> 0
   assert.equal(nodeMajorOf('garbage'), 0);
+  // A partially-malformed string must NOT yield a confident, wrong major.
+  assert.equal(nodeMajorOf('24garbage'), 0);
+  assert.equal(nodeMajorOf('v24x'), 0);
+  assert.equal(nodeMajorOf('26'), 26);       // bare major, no dot
 });
 
 test('an unparseable Node version does not produce a bogus warning', () => {

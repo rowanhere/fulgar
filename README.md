@@ -283,10 +283,15 @@ setting workers to the number of **physical** cores usually beats setting it to
 the logical count — the threads end up fighting over the same execution units.
 Try both on your machine and keep the faster one.
 
-The miner prints its effective settings when it starts, and tells you when you
-are leaving speed on the table. If you chose **Considerate** mode it stays quiet
-about this on purpose: yielding to your other programs is the whole point of
-that mode.
+The miner prints its effective settings every time it starts, so you can always
+see the duty cycle and worker count it is actually using.
+
+If you are on **Manual** mode it also points out when the throttle or the worker
+count is leaving speed on the table. The Smart modes deliberately say nothing
+about that — **Smart: Max** is already at 100%, and **Considerate** is meant to
+hold back so your other programs stay responsive. The Node-version reminder is
+the exception: an old Node costs you hashrate in every mode, so that one appears
+whichever mode you pick.
 
 ## Native engine
 
