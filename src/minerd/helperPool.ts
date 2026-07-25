@@ -11,6 +11,8 @@ const DEFAULT_ROTATE_THRESHOLD = 3;
 const DEFAULT_TIP_TIMEOUT_MS = 8_000;     // short: a black-holed helper fails over fast
 const DEFAULT_BLOCKS_TIMEOUT_MS = 30_000; // generous: /blocks can return up to 200 blocks
 const DEFAULT_BLOCKS_ROUNDS = 4;
+const STALE_ROTATE_ROUNDS = 3; // consecutive best-trailing polls before the primary hands off
+export const STALE_WARN_BLOCKS = 2; // blocks behind the best claim before a helper is called stale
 const BLOCKS_BACKOFF_MS = [500, 1_000, 2_000, 4_000];
 const blocksBackoff = (round: number): number => BLOCKS_BACKOFF_MS[Math.min(round, BLOCKS_BACKOFF_MS.length - 1)]!;
 
@@ -31,6 +33,9 @@ export class AllHelpersFailed extends Error {
   }
 }
 
+export interface HelperTipView { base: string; tip: Tip }
+export interface BestTip { best: Tip; sourceBase: string; views: HelperTipView[] }
+
 export interface HelperPoolOpts {
   getTip?: (base: string, opts: GetJsonOpts) => Promise<Tip>;
   getBlocks?: (base: string, from: number, max: number, signal: AbortSignal | undefined, opts: Omit<GetJsonOpts, 'signal'>) => Promise<Block[]>;
@@ -46,6 +51,7 @@ export interface HelperPoolOpts {
 export class HelperPool {
   private primaryIdx = 0;
   private primaryFails = 0;
+  private primaryStale = 0;
   private readonly helpers: string[];
   private readonly getTipFn: NonNullable<HelperPoolOpts['getTip']>;
   private readonly getBlocksFn: NonNullable<HelperPoolOpts['getBlocks']>;
@@ -118,6 +124,71 @@ export class HelperPool {
     return this.round('tip poll', (base) => this.getTipFn(base, { attempts: 1, timeoutMs: this.tipTimeoutMs, signal }));
   }
 
+  /** Poll EVERY helper's /tip in parallel and return the best (max-height)
+   *  claim, which helper made it, and all successful views. This is the
+   *  staleness defense: getTip() returns the FIRST success primary-first, so a
+   *  wedged-but-answering primary captures the miner forever (live-observed
+   *  2026-07-25). Tie-break prefers the current primary, else the first max
+   *  claimant in rotation order (stability — no flapping on propagation races).
+   *  Rotation: a hard-failed primary keeps the existing +1 failure streak; a
+   *  primary that ANSWERS but trails the best by ≥1 block for
+   *  STALE_ROTATE_ROUNDS consecutive polls hands the primary role directly to
+   *  the best claimant (the next helper in line may be just as stale). Zero
+   *  successes throw AllHelpersFailed, like a fully-failed round. */
+  async getBestTip(signal?: AbortSignal): Promise<BestTip> {
+    const results = await Promise.allSettled(
+      this.helpers.map((base) => this.getTipFn(base, { attempts: 1, timeoutMs: this.tipTimeoutMs, signal })),
+    );
+    const views: HelperTipView[] = [];
+    const errors: Array<{ base: string; error: Error }> = [];
+    for (let i = 0; i < this.helpers.length; i++) {
+      const base = this.helpers[i]!;
+      const r = results[i]!;
+      if (r.status === 'fulfilled') {
+        views.push({ base, tip: r.value });
+      } else {
+        const err = r.reason as Error;
+        if (err?.name === 'AbortError') throw err; // caller teardown — stop now
+        errors.push({ base, error: err });
+        this.onDebug(`tip poll via ${base} failed: ${err?.message}`);
+      }
+    }
+    if (views.length === 0) {
+      this.recordPrimary(true);
+      this.primaryStale = 0;
+      throw new AllHelpersFailed(errors);
+    }
+    const bestHeight = Math.max(...views.map((v) => v.tip.height));
+    const atBest = new Map(views.filter((v) => v.tip.height === bestHeight).map((v) => [v.base, v]));
+    let chosen = atBest.get(this.primary());
+    if (!chosen) {
+      for (const idx of this.order()) {
+        const v = atBest.get(this.helpers[idx]!);
+        if (v) { chosen = v; break; }
+      }
+    }
+    const primaryView = views.find((v) => v.base === this.primary());
+    if (!primaryView) {
+      // Primary's request failed → the existing connectivity streak (+1 rotation
+      // at threshold). Staleness is only measurable when the primary answers.
+      this.recordPrimary(true);
+      this.primaryStale = 0;
+    } else {
+      this.recordPrimary(false); // any primary answer resets the connectivity streak
+      if (primaryView.tip.height < bestHeight) {
+        this.primaryStale++;
+        if (this.primaryStale >= STALE_ROTATE_ROUNDS) {
+          this.primaryIdx = this.helpers.indexOf(chosen!.base);
+          this.primaryStale = 0;
+          this.onInfo(`[minerd] switching primary helper to ${this.primary()} (previous primary served a stale tip)`);
+        }
+      } else {
+        this.primaryStale = 0;
+      }
+    }
+    return { best: chosen!.tip, sourceBase: chosen!.base, views };
+  }
+
   /** Multi-round retry for block fetches; may rotate the primary mid-call (intentional — rotation is not call-scoped). */
   async getBlocks(from: number, max = 200, signal?: AbortSignal): Promise<Block[]> {
     let lastErr: Error | undefined;
@@ -137,4 +208,33 @@ export class HelperPool {
     const blocks = await this.round('block', (base) => this.getBlocksFn(base, height, 1, signal, { attempts: 1, timeoutMs: this.blocksTimeoutMs }));
     return blocks[0];
   }
+}
+
+/** Compute once-per-episode stale-helper warnings. A helper trailing the best
+ *  claim by ≥ STALE_WARN_BLOCKS enters `staleBases` and yields ONE warning
+ *  line; it leaves silently once back within 1 block (so a relapse warns
+ *  again). Mutates `staleBases` — the caller owns the episode state. Helpers
+ *  that hard-failed are not in `views` and are deliberately not warned about
+ *  here (the failure/rotation paths already surface them). */
+export function staleHelperWarnings(
+  views: HelperTipView[],
+  best: Tip,
+  sourceBase: string,
+  staleBases: Set<string>,
+): string[] {
+  const warnings: string[] = [];
+  for (const v of views) {
+    const behind = best.height - v.tip.height;
+    if (behind >= STALE_WARN_BLOCKS) {
+      if (!staleBases.has(v.base)) {
+        staleBases.add(v.base);
+        warnings.push(
+          `[minerd] helper ${v.base} is ${behind} blocks behind the network (serving height ${v.tip.height}) — following ${sourceBase}`,
+        );
+      }
+    } else if (behind <= 1) {
+      staleBases.delete(v.base);
+    }
+  }
+  return warnings;
 }

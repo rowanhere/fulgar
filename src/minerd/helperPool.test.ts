@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { HelperPool, AllHelpersFailed } from './helperPool.js';
+import { HelperPool, AllHelpersFailed, staleHelperWarnings } from './helperPool.js';
 import type { Tip } from './http.js';
 
 const A = 'https://a.example';
@@ -122,4 +122,101 @@ test('getBlocks propagates an AbortError from the inter-round sleep', async () =
   });
   await assert.rejects(() => pool.getBlocks(0, 200), (e) => (e as Error).name === 'AbortError');
   assert.equal(calls, 2); // one full round (A,B) then the sleep aborts before round 2
+});
+
+// ─── getBestTip: parallel best-claim selection + stale-primary rotation ──────
+
+test('getBestTip returns the max-height claim and its source helper', async () => {
+  const pool = new HelperPool([A, B, C], {
+    ...sink, sleep: noSleep,
+    getTip: async (base) => (base === B ? tip(12) : tip(10)),
+  });
+  const r = await pool.getBestTip();
+  assert.deepEqual(r.best, tip(12));
+  assert.equal(r.sourceBase, B);
+  assert.equal(r.views.length, 3); // every successful view is reported
+});
+
+test('getBestTip tie prefers the current primary (stability)', async () => {
+  const pool = new HelperPool([A, B], { ...sink, sleep: noSleep, getTip: async () => tip(9) });
+  const r = await pool.getBestTip();
+  assert.equal(r.sourceBase, A); // primary among the max claimants → primary wins
+});
+
+test('getBestTip tolerates partial failures and never rotates off a fresh primary', async () => {
+  const pool = new HelperPool([A, B], {
+    ...sink, sleep: noSleep,
+    getTip: async (base) => { if (base === B) throw new Error('525'); return tip(5); },
+  });
+  for (let i = 0; i < 5; i++) assert.deepEqual((await pool.getBestTip()).best, tip(5));
+  assert.equal(pool.primary(), A);
+});
+
+test('getBestTip throws AllHelpersFailed when every helper fails', async () => {
+  const pool = new HelperPool([A, B], { ...sink, sleep: noSleep, getTip: async () => { throw new Error('boom'); } });
+  await assert.rejects(() => pool.getBestTip(), (e) => e instanceof AllHelpersFailed);
+});
+
+test('getBestTip propagates a caller AbortError', async () => {
+  const pool = new HelperPool([A, B], {
+    ...sink, sleep: noSleep,
+    getTip: async () => { throw Object.assign(new Error('aborted'), { name: 'AbortError' }); },
+  });
+  await assert.rejects(() => pool.getBestTip(), (e) => (e as Error).name === 'AbortError');
+});
+
+test('a stale-but-answering primary rotates to the best claimant after 3 consecutive polls', async () => {
+  const infos: string[] = [];
+  const pool = new HelperPool([A, B, C], {
+    ...sink, sleep: noSleep, onInfo: (m) => infos.push(m),
+    getTip: async (base) => (base === A ? tip(10) : base === C ? tip(13) : tip(12)),
+  });
+  await pool.getBestTip(); await pool.getBestTip();
+  assert.equal(pool.primary(), A); // 2 stale polls — hysteresis holds
+  await pool.getBestTip();
+  assert.equal(pool.primary(), C); // 3rd → jump DIRECTLY to the best claimant (not +1)
+  assert.ok(infos.some((m) => m.includes('stale')));
+});
+
+test('a primary back at the best height resets the staleness streak', async () => {
+  let aBehind = true;
+  const pool = new HelperPool([A, B], {
+    ...sink, sleep: noSleep,
+    getTip: async (base) => (base === A && aBehind ? tip(10) : tip(12)),
+  });
+  await pool.getBestTip(); await pool.getBestTip(); // 2 stale
+  aBehind = false; await pool.getBestTip();         // recovered → streak reset
+  aBehind = true; await pool.getBestTip(); await pool.getBestTip(); // 2 again
+  assert.equal(pool.primary(), A);                  // never reached 3 consecutive
+});
+
+test('a hard-failing primary still rotates +1 via the existing failure streak', async () => {
+  const pool = new HelperPool([A, B, C], {
+    ...sink, sleep: noSleep, rotateThreshold: 3,
+    getTip: async (base) => { if (base === A) throw new Error('down'); return tip(7); },
+  });
+  await pool.getBestTip(); await pool.getBestTip(); await pool.getBestTip();
+  assert.equal(pool.primary(), B); // connectivity rotation unchanged: +1, not jump
+});
+
+// ─── staleHelperWarnings: once-per-episode warn state ────────────────────────
+
+test('staleHelperWarnings warns once per episode and clears on recovery', () => {
+  const staleBases = new Set<string>();
+  const views = [{ base: A, tip: tip(10) }, { base: B, tip: tip(13) }];
+  const w1 = staleHelperWarnings(views, tip(13), B, staleBases);
+  assert.equal(w1.length, 1);
+  assert.ok(w1[0]!.includes(A) && w1[0]!.includes('3 blocks behind') && w1[0]!.includes(B));
+  assert.equal(staleHelperWarnings(views, tip(13), B, staleBases).length, 0); // same episode → silent
+  const recovered = [{ base: A, tip: tip(13) }, { base: B, tip: tip(13) }];
+  assert.equal(staleHelperWarnings(recovered, tip(13), B, staleBases).length, 0);
+  assert.equal(staleBases.size, 0); // episode cleared…
+  assert.equal(staleHelperWarnings(views, tip(13), B, staleBases).length, 1); // …so a relapse warns again
+});
+
+test('staleHelperWarnings ignores a 1-block propagation lag', () => {
+  const staleBases = new Set<string>();
+  const views = [{ base: A, tip: tip(12) }, { base: B, tip: tip(13) }];
+  assert.equal(staleHelperWarnings(views, tip(13), B, staleBases).length, 0);
+  assert.equal(staleBases.size, 0);
 });
