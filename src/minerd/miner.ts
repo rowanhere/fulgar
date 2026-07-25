@@ -8,7 +8,7 @@ import { bytesToHex, compareBytes } from '../util/binary.js';
 import { applyBlockTxs, cloneState, stateRoot } from '../chain/state.js';
 import type { MinerConfig } from './config.js';
 import { postBlock } from './http.js';
-import { HelperPool } from './helperPool.js';
+import { HelperPool, staleHelperWarnings } from './helperPool.js';
 import { VerifierPool, verifyBlocksParallel } from './verify.js';
 import { ChainSync } from './sync.js';
 import { buildTemplate, type Template } from './template.js';
@@ -391,7 +391,7 @@ export async function runMiner(
   const sync = new ChainSync({
     chain,
     cores: cfg.workers,
-    getBlocks: (from, max) => helperPool.getBlocks(from, max),
+    getBlocks: (from, max, preferBase) => helperPool.getBlocks(from, max, undefined, preferBase),
     verifyBlocksParallel: (blocks, cores) =>
       verifierPool && !verifierTerminated ? verifierPool.verify(blocks) : verifyBlocksParallel(blocks, cores),
   });
@@ -672,6 +672,12 @@ export async function runMiner(
   reporter.synced(chain.height);
   reporter.status(status);
 
+  // Best-known network height (from the helper poll) + per-helper stale-episode
+  // state for once-per-episode warnings. Declared before the coordinator so the
+  // hashrate tick's reporter.chain(...) can render net= too.
+  let netTip = 0;
+  const staleBases = new Set<string>();
+
   // ── Snapshot persistence: periodic debounced save (§1) ──
   // Persist a fresh snapshot whenever the chain has advanced ≥SAVE_EVERY_BLOCKS
   // or ≥SAVE_EVERY_MS since the last write, whichever comes first. saveSnapshot
@@ -737,7 +743,7 @@ export async function runMiner(
     onLog: (msg) => {
       const hps = /^hps:(\d+(?:\.\d+)?)$/.exec(msg);
       if (hps) {
-        reporter.chain(chain.height, chain.tipDifficulty.toString(16));
+        reporter.chain(chain.height, chain.tipDifficulty.toString(16), Math.max(netTip, chain.height));
         reporter.hashrate(Number(hps[1]));
         if (smartController) reporter.smart?.({ mode: cfg.smart as 'max' | 'considerate', throttle: smartController.appliedThrottle(), clamped: smartController.isClamped(), phase: smartController.phase() });
         // ~1/sec tick is a convenient debounce clock for the periodic save.
@@ -758,20 +764,27 @@ export async function runMiner(
     },
   });
 
-  // Tip poller: rebuild when the network advances past us. getTip fails over across
-  // helpers; only a whole-round (all helpers) failure warns. An overlap guard skips
-  // a tick whose previous round is still in flight (failover can lengthen a round
-  // when helpers time out), so we never stack concurrent rounds.
+  // Tip poller: poll EVERY helper and follow the best verifiable claim — a
+  // wedged-but-answering helper must never capture the miner (live-observed
+  // 2026-07-25: a default helper served a >10-min-stale tip with clean HTTP
+  // 200s and zero warnings, pinning solo miners blocks behind the network).
+  // Blocks are fetched claimant-first (sourceBase). Only a whole-round (all
+  // helpers) failure warns. An overlap guard skips a tick whose previous round
+  // is still in flight, so we never stack concurrent rounds.
   let tipPolling = false;
   const tipTimer = setInterval(() => {
     if (tipPolling) return;
     tipPolling = true;
     void (async () => {
       try {
-        const tip = await helperPool.getTip();
-        if (tip.height > chain.height || tip.tipHash !== bytesToHex(chain.tip.hash)) {
-          await coord.tipAdvanced(tip);
-          reporter.chain(chain.height, chain.tipDifficulty.toString(16));
+        const { best, sourceBase, views } = await helperPool.getBestTip();
+        netTip = Math.max(best.height, chain.height);
+        for (const w of staleHelperWarnings(views, best, sourceBase, staleBases)) {
+          reporter.event('warn', w);
+        }
+        if (best.height > chain.height || best.tipHash !== bytesToHex(chain.tip.hash)) {
+          await coord.tipAdvanced({ height: best.height, tipHash: best.tipHash, sourceBase });
+          reporter.chain(chain.height, chain.tipDifficulty.toString(16), Math.max(netTip, chain.height));
           // The chain advanced from the network — a good moment to persist.
           maybeSave();
         }
