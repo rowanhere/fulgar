@@ -743,7 +743,7 @@ export async function runMiner(
     onLog: (msg) => {
       const hps = /^hps:(\d+(?:\.\d+)?)$/.exec(msg);
       if (hps) {
-        reporter.chain(chain.height, chain.tipDifficulty.toString(16), Math.max(netTip, chain.height));
+        reporter.chain(chain.height, chain.tipDifficulty.toString(16), netTip);
         reporter.hashrate(Number(hps[1]));
         if (smartController) reporter.smart?.({ mode: cfg.smart as 'max' | 'considerate', throttle: smartController.appliedThrottle(), clamped: smartController.isClamped(), phase: smartController.phase() });
         // ~1/sec tick is a convenient debounce clock for the periodic save.
@@ -778,13 +778,17 @@ export async function runMiner(
     void (async () => {
       try {
         const { best, sourceBase, views } = await helperPool.getBestTip();
-        netTip = Math.max(best.height, chain.height);
+        // The OBSERVED network tip, verbatim — never clamped up to our own
+        // height: after a reorg onto a heavier-but-shorter fork the network tip
+        // is genuinely below where we were, and clamping would report a height
+        // no helper claims. Rendering is suppressed unless we are BEHIND it.
+        netTip = best.height;
         for (const w of staleHelperWarnings(views, best, sourceBase, staleBases)) {
           reporter.event('warn', w);
         }
         if (best.height > chain.height || best.tipHash !== bytesToHex(chain.tip.hash)) {
           await coord.tipAdvanced({ height: best.height, tipHash: best.tipHash, sourceBase });
-          reporter.chain(chain.height, chain.tipDifficulty.toString(16), Math.max(netTip, chain.height));
+          reporter.chain(chain.height, chain.tipDifficulty.toString(16), netTip);
           // The chain advanced from the network — a good moment to persist.
           maybeSave();
         }

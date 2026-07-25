@@ -109,8 +109,10 @@ export interface MinerReporter {
   /** Called ~1×/sec with the number of hashes in the last window. */
   hashrate(hps: number): void;
   /** Latest chain tip height + difficulty (hex). `netHeight` (optional) is the
-   *  best-known NETWORK height from the helper poll — reporters show it only
-   *  when it differs from `height`, so a lagging local chain is visible. */
+   *  best-known NETWORK height from the helper poll, verbatim — reporters show
+   *  it only while we are BEHIND it, so a lagging local chain is visible without
+   *  the routine noise of being momentarily ahead (we just mined a block, or the
+   *  canonical fork is heavier-but-shorter than where we were). */
   chain(height: number, difficultyHex: string, netHeight?: number): void;
   /** A solo block was found and submitted. */
   found(info: FoundInfo): void;
@@ -230,7 +232,7 @@ export class ConsoleReporter implements MinerReporter {
     if (this.status_?.mode === 'pool') {
       process.stdout.write(`\r[pool-miner] ${hps} H/s${smartSuffix}   `);
     } else {
-      const net = this.netHeight !== undefined && this.netHeight !== this.height ? ` net=${this.netHeight}` : '';
+      const net = this.netHeight !== undefined && this.netHeight > this.height ? ` net=${this.netHeight}` : '';
       process.stdout.write(`\r[minerd] h=${this.height}${net} diff=${this.difficultyHex} hps:${hps}${smartSuffix}   `);
     }
   }

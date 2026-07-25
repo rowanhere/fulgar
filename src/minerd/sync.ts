@@ -45,11 +45,11 @@ export class ChainSync {
    * `onProgress` (if given) overrides the deps-level callback for this run; it is
    * called after each page is applied with the current chain height.
    */
-  async bootstrap(onProgress?: (height: number) => void): Promise<void> {
+  async bootstrap(onProgress?: (height: number) => void, preferBase?: string): Promise<void> {
     const report = onProgress ?? this.deps.onProgress;
     let from = this.chain.height + 1; // genesis (0) is already seeded
     for (;;) {
-      const blocks = await this.deps.getBlocks(from, PAGE);
+      const blocks = await this.deps.getBlocks(from, PAGE, preferBase);
       if (blocks.length === 0) return;
       const heightBefore = this.chain.height;
       await this.applyBatch(blocks);
@@ -109,7 +109,11 @@ export class ChainSync {
       // (e.g. a below-anchor reorg fired the snapshot-invalidation listener → reset to
       // genesis). Do NOT treat that drop as catch-up "progress" (the caller would mine
       // from the reset point) — re-sync forward to the helper tip first.
-      if (this.chain.height < heightBefore) { await this.bootstrap(); return true; }
+      // Re-sync through the SAME helper that claimed the tip we were chasing: a
+      // recovery bootstrap that leads with a stale primary can stop early on its
+      // short chain (or replay the whole thing onto it) and report progress from
+      // a height the network left behind.
+      if (this.chain.height < heightBefore) { await this.bootstrap(undefined, remoteTip?.sourceBase); return true; }
       // Tip moved (advanced, or reorged BY WORK to a heavier fork) → caught up.
       if (this.chain.height !== heightBefore || compareBytes(this.chain.tip.hash, tipBefore) !== 0) return changedSinceEntry();
       // Tip unchanged but the branch CONNECTED → the chain saw it and kept ours (the

@@ -265,3 +265,46 @@ test('a preferBase round does not touch primary rotation bookkeeping', async () 
   await pool.getBlocks(1, 200, undefined, B);
   assert.equal(pool.primary(), A);
 });
+
+// ─── rotation-state fixes (review round 1) ──────────────────────────────────
+
+test('a primary alternating hard-failure and stale answers still rotates (no counter-reset deadlock)', async () => {
+  // Each event used to clear the OTHER counter, so neither ever reached its
+  // threshold and a permanently unhealthy helper kept the primary role forever.
+  let failNext = true;
+  const pool = new HelperPool([A, B], {
+    ...sink, sleep: noSleep,
+    getTip: async (base) => {
+      if (base !== A) return tip(20);
+      const shouldFail = failNext;
+      failNext = !failNext;
+      if (shouldFail) throw new Error('down');
+      return tip(10); // answers, but stale
+    },
+  });
+  for (let i = 0; i < 8 && pool.primary() === A; i++) await pool.getBestTip();
+  assert.equal(pool.primary(), B, 'rotated away from the alternately-failing/stale primary');
+});
+
+test('a hard-failure rotation does not hand the new primary its predecessor stale streak', async () => {
+  const helpers = [A, B, C];
+  let aStale = true;
+  const pool = new HelperPool(helpers, {
+    ...sink, sleep: noSleep, rotateThreshold: 1,
+    getTip: async (base) => {
+      if (base === A) {
+        if (aStale) return tip(10); // stale answer, accrues primaryStale
+        throw new Error('down');    // then hard-fails → rotates to B
+      }
+      return base === B ? tip(10) : tip(20); // B is also stale; C is best
+    },
+  });
+  await pool.getBestTip();
+  await pool.getBestTip(); // primaryStale = 2 on A
+  assert.equal(pool.primary(), A);
+  aStale = false;
+  await pool.getBestTip(); // A hard-fails, rotateThreshold 1 → rotate to B
+  assert.equal(pool.primary(), B);
+  await pool.getBestTip(); // B answers stale ONCE — must not be handed off yet
+  assert.equal(pool.primary(), B, 'new primary starts its own staleness streak');
+});

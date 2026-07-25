@@ -157,3 +157,38 @@ test('catchUp still THROWS past the widen cap (deep-fork contract preserved)', a
   const s = scenario({ start: 200, forkAt: -1, helperTip: 205, onConnect: 'reorg' });
   await assert.rejects(() => s.run(), /fork deeper than/);
 });
+
+test('a reset-recovery bootstrap re-syncs through the claimant, not the (possibly stale) primary', async () => {
+  // Applying the claimant's page can trigger a snapshot-invalidation reset. The
+  // recovery bootstrap must keep chasing the SAME helper that claimed the tip —
+  // leading with a stale primary can stop early on its short chain and report
+  // progress from a height the network has left behind.
+  let height = 200;
+  let tipHash = new Uint8Array([9]);
+  let didReset = false;
+  const prefers: Array<string | undefined> = [];
+  const chain = {
+    get height() { return height; },
+    get tip() { return { hash: tipHash }; },
+    hasBlock: (hex: string) => hex === '01',
+    addBlockWithPow: async (block: any): Promise<string | null> => {
+      if (block.__resets && !didReset) { didReset = true; height = 0; tipHash = new Uint8Array([0]); return null; }
+      if (block.__advance) { height = block.__tipHeight; tipHash = new Uint8Array([height & 0xff]); return null; }
+      return 'rejected';
+    },
+  };
+  const getBlocks = async (from: number, _max: number, preferBase?: string): Promise<any[]> => {
+    prefers.push(preferBase);
+    if (!didReset) return [{ header: { height: from, prevHash: new Uint8Array([1]) }, __resets: true, transactions: [] }];
+    if (from > 205) return [];
+    return [{ header: { height: from, prevHash: new Uint8Array([1]) }, __advance: true, __tipHeight: 205, transactions: [] }];
+  };
+  const sync = new ChainSync({ chain: chain as any, cores: 1, getBlocks, verifyBlocksParallel: async (b) => b.map(() => true) });
+  await sync.catchUp({ height: 205, tipHash: 'ff', sourceBase: 'https://claimant.example' });
+  assert.equal(didReset, true, 'the reset fired during applyBatch');
+  assert.ok(prefers.length > 1, 'bootstrap fetched after the reset');
+  assert.ok(
+    prefers.every((p) => p === 'https://claimant.example'),
+    `every fetch (incl. the recovery bootstrap) used the claimant: ${JSON.stringify(prefers)}`,
+  );
+});

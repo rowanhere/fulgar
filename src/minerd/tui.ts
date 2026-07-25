@@ -765,7 +765,7 @@ export class DashboardReporter implements MinerReporter {
       out.push(`${DIM}fnd  ${RESET}${group(this.foundCount)} ${DIM}(${group(this.acceptedCount)}✓ ${group(this.rejectedCount)}✗)${RESET}`);
     }
     out.push(`${DIM}work ${RESET}${compact(this.totalHashes)}`);
-    const net = this.netHeight !== undefined && this.netHeight !== this.height ? ` ${DIM}net  ${RESET}${group(this.netHeight)}` : '';
+    const net = this.netHeight !== undefined && this.netHeight > this.height ? ` ${DIM}net  ${RESET}${group(this.netHeight)}` : '';
     out.push(`${DIM}hgt  ${RESET}${group(this.height)}${net} ${DIM}diff ${this.difficultyHex}${RESET}`);
     return out;
   }
@@ -841,7 +841,7 @@ export class DashboardReporter implements MinerReporter {
     } else {
       lines.push(`${DIM}fnd ${RESET}${group(this.foundCount)}`);
     }
-    const netNarrow = this.netHeight !== undefined && this.netHeight !== this.height ? ` ${DIM}net ${RESET}${group(this.netHeight)}` : '';
+    const netNarrow = this.netHeight !== undefined && this.netHeight > this.height ? ` ${DIM}net ${RESET}${group(this.netHeight)}` : '';
     lines.push(`${DIM}hgt ${RESET}${group(this.height)}${netNarrow}`);
     if (this.updateNotice_ && this.updateNoticeText(this.updateNotice_)) {
       const color = this.updateNotice_.mustUpdate ? RED : YELLOW;

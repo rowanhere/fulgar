@@ -117,3 +117,12 @@ test('ConsoleReporter omits net= when netHeight is not provided (back-compat)', 
   const out = captureStdout(() => r.hashrate(50));
   assert.ok(out.includes('h=100 ') && !out.includes('net='));
 });
+
+test('ConsoleReporter omits net= when the local chain is AHEAD of the observed network tip', () => {
+  // Reorg onto a heavier-but-SHORTER fork, or a block we just mined: the network
+  // tip is genuinely below us. Truthful to record, but not worth a status flag.
+  const r = new ConsoleReporter();
+  r.chain(205, 'ff', 190);
+  const out = captureStdout(() => r.hashrate(50));
+  assert.ok(out.includes('h=205 ') && !out.includes('net='), `unexpected net= while ahead: ${JSON.stringify(out)}`);
+});

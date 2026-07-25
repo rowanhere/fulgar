@@ -101,6 +101,10 @@ export class HelperPool {
     if (this.primaryFails >= this.rotateThreshold && this.helpers.length > 1) {
       this.primaryIdx = (this.primaryIdx + 1) % this.helpers.length;
       this.primaryFails = 0;
+      // The staleness streak is a property of the helper holding the role, not
+      // of the role — a new primary must not inherit its predecessor's count
+      // (it would be handed off after a single stale poll).
+      this.primaryStale = 0;
       this.onInfo(`[minerd] switching primary helper to ${this.primary()}`);
     }
   }
@@ -178,9 +182,11 @@ export class HelperPool {
     const primaryView = views.find((v) => v.base === this.primary());
     if (!primaryView) {
       // Primary's request failed → the existing connectivity streak (+1 rotation
-      // at threshold). Staleness is only measurable when the primary answers.
+      // at threshold). Staleness is not MEASURABLE this round, but the streak is
+      // deliberately NOT cleared: a primary alternating failure/stale-answer
+      // would otherwise reset one counter with each event and never rotate on
+      // either, keeping a permanently unhealthy helper in the role forever.
       this.recordPrimary(true);
-      this.primaryStale = 0;
     } else {
       this.recordPrimary(false); // any primary answer resets the connectivity streak
       if (primaryView.tip.height < bestHeight) {
