@@ -11,6 +11,8 @@ import { negotiatedRequired, runNegotiatedPoolClient } from './negotiatedClient.
 import { startPoolStats } from './poolStats.js';
 import { checkForUpdate } from './updateCheck.js';
 import { isFulgurPool } from './pools.js';
+import { perfHints, nodeMajorOf } from './perfAdvice.js';
+import { cpuBudget } from './cpuBudget.js';
 import { NONCE_SPACE } from './partition.js';
 import { SmartController, smartStartDuty } from './smartController.js';
 import { createDemandSignal } from './demand.js';
@@ -630,6 +632,16 @@ export async function runPoolClient(
     throttle: startDuty,
     address: payoutAddress,
   });
+  // One-time hashrate advice. Reads config only - it never writes a setting.
+  for (const hint of perfHints({
+    smart,
+    throttle: startDuty,
+    workers,
+    usableCores: cpuBudget().usableCores,
+    nodeMajor: nodeMajorOf(process.versions.node),
+  })) {
+    reporter.event('info', hint);
+  }
   reporter.event('info', `[pool-miner] registered worker ${workerId} at ${poolUrl}`);
   reporter.event('info', `[pool-miner] grind engine: ${useNative ? 'native' : 'wasm'}`);
   reporter.synced(0);

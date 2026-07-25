@@ -20,6 +20,8 @@ import { ConsoleReporter, type MinerReporter, type ReporterStatus } from './repo
 import { restoreSnapshot, saveSnapshot, deleteSnapshot } from './persistence.js';
 import { SmartController, smartStartDuty } from './smartController.js';
 import { createDemandSignal } from './demand.js';
+import { perfHints, nodeMajorOf } from './perfAdvice.js';
+import { cpuBudget } from './cpuBudget.js';
 
 /**
  * Post-restore integrity gate, identical in spirit to `mine:dryrun`: build a
@@ -698,6 +700,17 @@ export async function runMiner(
   reporter.chain(chain.height, chain.tipDifficulty.toString(16));
   reporter.synced(chain.height);
   reporter.status(status);
+
+  // One-time hashrate advice. Reads config only - it never writes a setting.
+  for (const hint of perfHints({
+    smart: cfg.smart as 'off' | 'max' | 'considerate',
+    throttle: startDuty,
+    workers: cfg.workers,
+    usableCores: cpuBudget().usableCores,
+    nodeMajor: nodeMajorOf(process.versions.node),
+  })) {
+    reporter.event('info', hint);
+  }
 
   // Best-known network height (from the helper poll) + per-helper stale-episode
   // state for once-per-episode warnings. Declared before the coordinator so the

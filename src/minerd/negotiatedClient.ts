@@ -38,6 +38,8 @@ import { GrindPool } from './grindPool.js';
 import { HelperPool } from './helperPool.js';
 import { NativeGrindPool } from './nativeGrindPool.js';
 import { resolvePoolEngine, type PoolEngineChoice } from './poolEngine.js';
+import { perfHints, nodeMajorOf } from './perfAdvice.js';
+import { cpuBudget } from './cpuBudget.js';
 import {
   chainIntegrityOK, confirmRestoredSnapshot, SAVE_EVERY_BLOCKS, SAVE_EVERY_MS,
   SNAPSHOT_CONFIRM_TIMEOUT_MS, type SnapshotConfirmResult,
@@ -474,6 +476,16 @@ export async function runNegotiatedPoolClient(
     throttle: startDuty,
     address: payoutAddress,
   });
+  // One-time hashrate advice. Reads config only - it never writes a setting.
+  for (const hint of perfHints({
+    smart,
+    throttle: startDuty,
+    workers,
+    usableCores: cpuBudget().usableCores,
+    nodeMajor: nodeMajorOf(process.versions.node),
+  })) {
+    reporter.event('info', hint);
+  }
   reporter.event('info', `[nego-miner] ${poolUrl} requires negotiated mode — this miner will build its own blocks (pool-payout coinbase) and mine those.`);
   reporter.event('info', `[nego-miner] grind engine: ${backend}`);
 
