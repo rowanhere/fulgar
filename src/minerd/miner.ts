@@ -527,6 +527,18 @@ export async function runMiner(
       throw e;
     }
 
+    // Bootstrap ends on the first empty/short page, which a helper can serve
+    // while the network is demonstrably higher (it failed over mid-sync, or the
+    // claimant itself fell behind). Say so rather than presenting a chain the
+    // network has left behind as fully synced — the tip poller closes the gap on
+    // its next tick, and this line is what makes that visible if it doesn't.
+    if (targetHeight > 0 && chain.height < targetHeight) {
+      reporter.event(
+        'warn',
+        `[minerd] synced to ${chain.height.toLocaleString('en-US')} but the network reported ${targetHeight.toLocaleString('en-US')} — catching up`,
+      );
+    }
+
     // Free the bootstrap workers before mining. The occasional catchUp() (tip
     // poller) is one small page, so the one-shot pool there is fine.
     terminateVerifier();
@@ -547,6 +559,14 @@ export async function runMiner(
         try { chain.reset(); } catch { /* ignore */ }
         snapshotInvalidated = false;
         reporter.event('info', `[minerd] re-syncing BrowserCoin chain from genesis…`);
+        // Re-derive the claimant: the startup pick can be minutes old by now and
+        // may itself have fallen behind, which would pin the whole replay to a
+        // stale chain. A failed re-poll keeps the startup values.
+        try {
+          const fresh = await helperPool.getBestTip(signal);
+          targetHeight = fresh.best.height;
+          syncSource = fresh.sourceBase;
+        } catch { /* keep the startup target/claimant */ }
         try {
           await sync.bootstrap((h) => reporter.syncProgress(h, targetHeight), syncSource);
         } catch (e) {
