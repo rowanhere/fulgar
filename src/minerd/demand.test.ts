@@ -206,6 +206,15 @@ test('idleFractionFromCpuDeltas HOLDS (null) when one core reads BACKWARDS while
   assert.equal(idleFractionFromCpuDeltas(prev, next), null);
 });
 
+test('idleFractionFromCpuDeltas rejects a backwards field even when the core total stays POSITIVE', () => {
+  // The subtle case: only `user` goes backwards while `idle` advances more, so
+  // the per-core total is still +100 and an idle-only guard would pass it -
+  // yielding 200/100 = 2.0, which the caller clamps to 1 ("completely free").
+  const prev = [{ user: 100, nice: 0, sys: 0, idle: 1000, irq: 0 }];
+  const next = [{ user: 0, nice: 0, sys: 0, idle: 1200, irq: 0 }];
+  assert.equal(idleFractionFromCpuDeltas(prev, next), null);
+});
+
 test('idleFractionFromCpuDeltas still computes normally on forward counters', () => {
   const prev = [{ user: 100, nice: 0, sys: 50, idle: 1000, irq: 0 }];
   const next = [{ user: 110, nice: 0, sys: 50, idle: 1090, irq: 0 }];

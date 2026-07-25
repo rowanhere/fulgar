@@ -121,16 +121,17 @@ export function idleFractionFromCpuDeltas(prev: CpuTimes[], next: CpuTimes[]): n
     if (!p || !n) continue;
     // A BACKWARDS counter (cpu hot-plug, a core going offline and returning, a
     // host-side counter reset) yields negative deltas that quietly corrupt the
-    // ratio — one core reading backwards can cancel another's real work and make
-    // a busy box look idle, which is exactly when Considerate must NOT ramp up.
-    // The cgroup and /proc/stat readers in this file already reject-and-hold on
-    // that; this fallback silently did not. Returning null makes the caller HOLD
-    // its current duty, matching them.
-    const dIdle = n.idle - p.idle;
-    const dTotal = (n.user - p.user) + (n.nice - p.nice) + (n.sys - p.sys) + dIdle + (n.irq - p.irq);
-    if (dIdle < 0 || dTotal < 0) return null;
+    // ratio. EVERY field must be checked, not just idle and the per-core total:
+    // `user 100→0` with `idle 1000→1200` leaves the total positive (+100) while
+    // the idle sum is intact (+200), giving an idle fraction of 2.0 — a box
+    // reading as MORE than fully idle, which the caller clamps to 1 and treats
+    // as "completely free" right when Considerate must NOT ramp up.
+    // Rejecting the sample matches the cgroup and /proc/stat readers above.
+    const dUser = n.user - p.user, dNice = n.nice - p.nice, dSys = n.sys - p.sys;
+    const dIdle = n.idle - p.idle, dIrq = n.irq - p.irq;
+    if (dUser < 0 || dNice < 0 || dSys < 0 || dIdle < 0 || dIrq < 0) return null;
     idle += dIdle;
-    total += dTotal;
+    total += dUser + dNice + dSys + dIdle + dIrq;
   }
   return total > 0 ? idle / total : null;
 }
