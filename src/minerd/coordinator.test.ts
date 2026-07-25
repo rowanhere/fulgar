@@ -13,6 +13,7 @@ const wait = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms)
 function makeCoord(opts: {
   submit?: () => Promise<{ label: string }>;
   catchUp?: () => Promise<void>;
+  catchUpChanged?: boolean;
   buildTemplate?: () => any;
   retryRebuildMs?: number;
 } = {}): {
@@ -36,7 +37,7 @@ function makeCoord(opts: {
     },
     poolStop: () => { calls.stops++; },
     submit: async () => { calls.submits++; return opts.submit ? await opts.submit() : { label: 'h=1' }; },
-    syncCatchUp: async () => { calls.catchUps++; if (opts.catchUp) await opts.catchUp(); },
+    syncCatchUp: async () => { calls.catchUps++; if (opts.catchUp) await opts.catchUp(); return opts.catchUpChanged ?? true; },
     onLog: (m) => calls.logs.push(m),
     retryRebuildMs: opts.retryRebuildMs,
   };
@@ -96,6 +97,39 @@ test('tipAdvanced: a THROWING syncCatchUp resets busy AND stops the known-stale 
   assert.equal(calls.builds, 2);
 });
 
+test('tipAdvanced with an UNCHANGED chain does not stop or rebuild the grind (anti-churn pin)', async () => {
+  // A stale-but-answering helper disagreeing with our chain must not restart
+  // the grind every poll tick — catchUp reports "nothing changed" and the
+  // running template stays valid (live-observed churn scenario, 2026-07-25).
+  const { coord, calls } = makeCoord({ catchUpChanged: false });
+  coord.rebuild();
+  await coord.tipAdvanced({ height: 10, tipHash: 'ff' });
+  assert.equal(calls.catchUps, 1);
+  assert.equal(calls.stops, 0, 'grind not stopped');
+  assert.equal(calls.builds, 1, 'no rebuild — only the initial one');
+});
+
+test('tipAdvanced with a CHANGED chain stops the stale grind and rebuilds', async () => {
+  const { coord, calls } = makeCoord({ catchUpChanged: true });
+  coord.rebuild();
+  await coord.tipAdvanced({ height: 10, tipHash: 'ff' });
+  assert.equal(calls.stops, 1);
+  assert.equal(calls.builds, 2);
+});
+
+test('tipAdvanced passes sourceBase through to syncCatchUp untouched', async () => {
+  let seen: unknown;
+  const coord = new MinerCoordinator({
+    buildTemplate: () => ({ header: {}, headerBytes: new Uint8Array(), targetHex: 'ff' } as any),
+    poolStart: () => {}, poolStop: () => {},
+    submit: async () => ({ label: 'x' }),
+    syncCatchUp: async (rt) => { seen = rt; return false; },
+    onLog: () => {},
+  });
+  await coord.tipAdvanced({ height: 7, tipHash: 'aa', sourceBase: 'https://x.example' });
+  assert.deepEqual(seen, { height: 7, tipHash: 'aa', sourceBase: 'https://x.example' });
+});
+
 test('HIGH rebuild-guard: a throwing buildTemplate is caught + logged (no unhandled rejection), busy resets', async () => {
   let builds = 0;
   const logs: string[] = [];
@@ -109,7 +143,7 @@ test('HIGH rebuild-guard: a throwing buildTemplate is caught + logged (no unhand
     poolStart: (_h, _t, onSolved) => { solvedCb = onSolved; },
     poolStop: () => {},
     submit: async () => ({ label: 'h=1' }),
-    syncCatchUp: async () => {},
+    syncCatchUp: async () => true,
     onLog: (m) => logs.push(m),
   };
   const coord = new MinerCoordinator(deps);
@@ -119,7 +153,7 @@ test('HIGH rebuild-guard: a throwing buildTemplate is caught + logged (no unhand
   assert.ok(logs.some((l) => /error:rebuild failed/.test(l)), 'rebuild failure surfaced via the error: channel');
   // No unhandled rejection (the runner would fail the test). busy must have reset:
   let caughtUp = false;
-  deps.syncCatchUp = async () => { caughtUp = true; };
+  deps.syncCatchUp = async () => { caughtUp = true; return true; };
   await coord.tipAdvanced();
   assert.equal(caughtUp, true, 'busy reset → a later tip-advance still runs after the rebuild failure');
   coord.dispose();

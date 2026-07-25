@@ -11,11 +11,12 @@ import { ChainSync } from './sync.js';
 // no Argon2. prevHash byte [1]→hasBlock '01' true ('connected'); [0]→'00' false.
 
 function scenario(opts: {
-  start: number; forkAt: number; helperTip: number; onConnect: 'reorg' | 'insync'; remoteHasTip?: boolean;
-}): { run: () => Promise<void>; froms: number[]; height: () => number } {
+  start: number; forkAt: number; helperTip: number; onConnect: 'reorg' | 'insync'; remoteHasTip?: boolean; sourceBase?: string;
+}): { run: () => Promise<boolean>; froms: number[]; prefers: Array<string | undefined>; height: () => number } {
   let height = opts.start;
   let tipHash = new Uint8Array([opts.start & 0xff, 1]);
   const froms: number[] = [];
+  const prefers: Array<string | undefined> = [];
   const chain = {
     get height() { return height; },
     get tip() { return { hash: tipHash }; },
@@ -26,15 +27,16 @@ function scenario(opts: {
       return null; // connected (applied / known / equal-work sibling)
     },
   };
-  const getBlocks = async (from: number): Promise<any[]> => {
+  const getBlocks = async (from: number, _max: number, preferBase?: string): Promise<any[]> => {
     froms.push(from);
+    prefers.push(preferBase);
     if (from > opts.helperTip) return []; // helper has nothing at/above this height
     const connects = opts.forkAt >= 0 && from <= opts.forkAt;
     return [{ header: { height: from, prevHash: new Uint8Array([connects ? 1 : 0]) }, __connects: connects, __tipHeight: opts.helperTip, transactions: [] }];
   };
   const sync = new ChainSync({ chain: chain as any, cores: 1, getBlocks, verifyBlocksParallel: async (b) => b.map(() => true) });
-  const remoteTip = { height: opts.helperTip, tipHash: opts.remoteHasTip ? '01' : 'ff' };
-  return { run: () => sync.catchUp(remoteTip), froms, height: () => height };
+  const remoteTip = { height: opts.helperTip, tipHash: opts.remoteHasTip ? '01' : 'ff', sourceBase: opts.sourceBase };
+  return { run: () => sync.catchUp(remoteTip), froms, prefers, height: () => height };
 }
 
 test('a reorg deeper than the 5-overlap is absorbed by progressively widening', async () => {
@@ -108,4 +110,50 @@ test('a reset (height drops below us mid-apply) re-syncs via bootstrap, not "pro
   assert.equal(didReset, true, 'the reset fired during applyBatch');
   assert.equal(height, 205, 're-synced forward via bootstrap (NOT left at genesis to mine from)');
   assert.ok(froms.includes(1), 'bootstrap re-fetched from genesis+1 after the reset');
+});
+
+// ─── the changed-flag: only a REAL chain change may restart the grind ────────
+
+test('catchUp returns true when the chain advanced', async () => {
+  const s = scenario({ start: 200, forkAt: 130, helperTip: 205, onConnect: 'reorg' });
+  assert.equal(await s.run(), true);
+});
+
+test('catchUp returns true on a down-reorg to a heavier-shorter fork', async () => {
+  const s = scenario({ start: 200, forkAt: 165, helperTip: 190, onConnect: 'reorg' });
+  assert.equal(await s.run(), true);
+});
+
+test('catchUp fast path (remote tip already held) returns false without fetching', async () => {
+  const s = scenario({ start: 200, forkAt: 130, helperTip: 205, onConnect: 'reorg', remoteHasTip: true });
+  assert.equal(await s.run(), false);
+  assert.deepEqual(s.froms, []); // never fetched
+});
+
+test('catchUp returns false on an empty page (unverifiable claim — grind must not restart)', async () => {
+  const chain = {
+    get height() { return 200; },
+    get tip() { return { hash: new Uint8Array([200 & 0xff, 1]) }; },
+    hasBlock: () => false,
+    addBlockWithPow: async () => 'unreachable',
+  };
+  const sync = new ChainSync({ chain: chain as any, cores: 1, getBlocks: async () => [], verifyBlocksParallel: async (b) => b.map(() => true) });
+  assert.equal(await sync.catchUp({ height: 205, tipHash: 'ff' }), false);
+});
+
+test('catchUp returns false when the branch connected but was not heavier (in sync)', async () => {
+  const s = scenario({ start: 200, forkAt: 199, helperTip: 205, onConnect: 'insync' });
+  assert.equal(await s.run(), false);
+});
+
+test('catchUp threads the claimant into every getBlocks call', async () => {
+  const s = scenario({ start: 200, forkAt: 130, helperTip: 205, onConnect: 'reorg', sourceBase: 'https://claimant.example' });
+  await s.run();
+  assert.ok(s.prefers.length > 0);
+  assert.ok(s.prefers.every((p) => p === 'https://claimant.example'), `every fetch used the claimant: ${JSON.stringify(s.prefers)}`);
+});
+
+test('catchUp still THROWS past the widen cap (deep-fork contract preserved)', async () => {
+  const s = scenario({ start: 200, forkAt: -1, helperTip: 205, onConnect: 'reorg' });
+  await assert.rejects(() => s.run(), /fork deeper than/);
 });

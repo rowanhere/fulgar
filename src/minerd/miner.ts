@@ -170,9 +170,11 @@ export interface CoordinatorDeps {
   ) => void;
   poolStop: () => void;
   submit: (template: Template, nonce: number) => Promise<{ label: string }>;
-  /** Catch the chain up. The observed remote tip (when known) lets the sync fetch
-   *  below a heavier-but-SHORTER fork whose canonical tip sits below our height. */
-  syncCatchUp: (remoteTip?: { height: number; tipHash: string }) => Promise<void>;
+  /** Catch the chain up; resolves TRUE iff the local chain actually changed.
+   *  The observed remote tip (when known) lets the sync fetch below a
+   *  heavier-but-SHORTER fork whose canonical tip sits below our height;
+   *  `sourceBase` is the helper that claimed it (blocks fetched claimant-first). */
+  syncCatchUp: (remoteTip?: { height: number; tipHash: string; sourceBase?: string }) => Promise<boolean>;
   onLog: (msg: string) => void;
   retryRebuildMs?: number;
 }
@@ -276,15 +278,21 @@ export class MinerCoordinator {
 
   /** Called by the tip poller when the network has advanced past us. The observed
    *  remote tip is threaded into the sync so a heavier-but-shorter fork is reachable. */
-  async tipAdvanced(remoteTip?: { height: number; tipHash: string }): Promise<void> {
+  async tipAdvanced(remoteTip?: { height: number; tipHash: string; sourceBase?: string }): Promise<void> {
     if (this.busy) return;
     this.busy = true;
     // busy must ALWAYS reset (try/catch/finally) or the miner wedges. On a clean
     // catch-up we stop the stale grind and rebuild on the new tip.
     try {
-      await this.deps.syncCatchUp(remoteTip);
-      this.deps.poolStop();
-      this.safeRebuild();
+      const advanced = await this.deps.syncCatchUp(remoteTip);
+      // Only a chain that actually CHANGED invalidates the running grind. An
+      // unverifiable/empty claim (a wedged or lying helper) must NOT restart the
+      // grind: the poller re-fires every tick while any helper disagrees with
+      // us, and stopping verified work on a no-op is self-inflicted downtime.
+      if (advanced) {
+        this.deps.poolStop();
+        this.safeRebuild();
+      }
     } catch (e) {
       // Catch-up FAILED — but the tip HAS moved (that's why the poller called us), so
       // the current template is known-stale. STOP grinding it rather than leaving it

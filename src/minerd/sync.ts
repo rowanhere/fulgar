@@ -16,10 +16,16 @@ const CATCHUP_WIDEN_FACTOR = 5;
 const CATCHUP_MAX_OVERLAP = SNAPSHOT_DEPTH - 10; // = 90; comfortably above the anchor
 const YIELD_EVERY = 32; // yield a macrotask every N blocks so timers/keypresses run
 
+/** An observed remote tip. `sourceBase` is the helper that CLAIMED it — block
+ *  fetches chase the claim through that helper first, so a tip learned from one
+ *  helper is never pursued through a different, staler one (which returns an
+ *  empty page and masquerades as "caught up"). */
+export interface RemoteTip { height: number; tipHash: string; sourceBase?: string }
+
 export interface SyncDeps {
   chain: Blockchain;
   cores: number;
-  getBlocks: (fromHeight: number, max: number) => Promise<Block[]>;
+  getBlocks: (fromHeight: number, max: number, preferBase?: string) => Promise<Block[]>;
   // The `cores` arg is honored by the one-shot verifyBlocksParallel but is
   // ignored when a persistent VerifierPool is bound (the pool already owns its
   // worker count). The interface shape is kept stable for both callers.
@@ -65,10 +71,18 @@ export class ChainSync {
    * common ancestor and retry, so we stop re-grinding the old fork. Bounded so a
    * pathologically deep fork warns and yields rather than thrashing.
    */
-  async catchUp(remoteTip?: { height: number; tipHash: string }): Promise<void> {
+  async catchUp(remoteTip?: RemoteTip): Promise<boolean> {
     // Fast path: if we already hold the helper's tip block, we're at or ahead of it on
     // the same chain → in sync, nothing to fetch or re-verify.
-    if (remoteTip && this.chain.hasBlock(remoteTip.tipHash)) return;
+    if (remoteTip && this.chain.hasBlock(remoteTip.tipHash)) return false;
+    // Report whether this call CHANGED the local chain: the caller only restarts
+    // the grind on a real change. An unverifiable/empty claim (a wedged or lying
+    // helper) must not stop verified work — that was a grind restart every poll
+    // tick for as long as the helper disagreed with us (observed 2026-07-25).
+    const entryHeight = this.chain.height;
+    const entryTip = this.chain.tip.hash;
+    const changedSinceEntry = (): boolean =>
+      this.chain.height !== entryHeight || compareBytes(this.chain.tip.hash, entryTip) !== 0;
     let overlap = CATCHUP_OVERLAP;
     for (;;) {
       // Fetch from below BOTH our tip AND the remote tip. A heavier-but-SHORTER fork's
@@ -78,8 +92,8 @@ export class ChainSync {
       const from = Math.max(1, base - overlap);
       const heightBefore = this.chain.height;
       const tipBefore = this.chain.tip.hash;
-      const blocks = await this.deps.getBlocks(from, PAGE);
-      if (blocks.length === 0) return; // even fetching from below the remote tip got nothing → caught up
+      const blocks = await this.deps.getBlocks(from, PAGE, remoteTip?.sourceBase);
+      if (blocks.length === 0) return changedSinceEntry(); // even fetching from below the remote tip got nothing → caught up
       // Does the helper's LOWEST fetched block link to a block we already hold? If so,
       // the chain now has a complete branch from a known ancestor and makes its OWN
       // strictly-work-based fork choice in applyBatch (reorg iff the branch is heavier).
@@ -95,13 +109,13 @@ export class ChainSync {
       // (e.g. a below-anchor reorg fired the snapshot-invalidation listener → reset to
       // genesis). Do NOT treat that drop as catch-up "progress" (the caller would mine
       // from the reset point) — re-sync forward to the helper tip first.
-      if (this.chain.height < heightBefore) { await this.bootstrap(); return; }
+      if (this.chain.height < heightBefore) { await this.bootstrap(); return true; }
       // Tip moved (advanced, or reorged BY WORK to a heavier fork) → caught up.
-      if (this.chain.height !== heightBefore || compareBytes(this.chain.tip.hash, tipBefore) !== 0) return;
+      if (this.chain.height !== heightBefore || compareBytes(this.chain.tip.hash, tipBefore) !== 0) return changedSinceEntry();
       // Tip unchanged but the branch CONNECTED → the chain saw it and kept ours (the
       // branch was not strictly heavier: an equal-work sibling, a lighter fork, or just
       // already-known blocks). We're in sync; don't widen or re-verify deeper.
-      if (connected) return;
+      if (connected) return changedSinceEntry();
       // The branch did NOT connect → the fork is deeper than `overlap`. Widen toward
       // the common ancestor; or, past the cap (a catastrophic 51%-class reorg), THROW
       // so the caller (tipAdvanced) STOPS the grind instead of mining a chain it can't
