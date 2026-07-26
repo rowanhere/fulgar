@@ -50,7 +50,7 @@ import { ConsoleReporter, type MinerReporter, type ReporterStatus } from './repo
 import { SmartController, smartStartDuty } from './smartController.js';
 import { createDemandSignal } from './demand.js';
 import { startPoolStats } from './poolStats.js';
-import { ChainSync } from './sync.js';
+import { ChainSync, STATE_RETAIN } from './sync.js';
 import { checkForUpdate } from './updateCheck.js';
 import { VerifierPool, verifyBlocksParallel } from './verify.js';
 
@@ -527,6 +527,7 @@ export async function runNegotiatedPoolClient(
     getBlocks: (from, max) => helperPool.getBlocks(from, max, signal),
     verifyBlocksParallel: (blocks, cores) =>
       verifier ? verifier.verify(blocks) : verifyBlocksParallel(blocks, cores),
+    stateRetain: STATE_RETAIN,
   });
 
   let targetHeight = 0;
@@ -801,6 +802,7 @@ export async function runNegotiatedPoolClient(
           cores: workers,
           getBlocks: (from, max) => helperPool.getBlocks(from, max, connSignal),
           verifyBlocksParallel: (blocks, cores) => verifyBlocksParallel(blocks, cores),
+          stateRetain: STATE_RETAIN,
         });
         syncing = true;
         try {

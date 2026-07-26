@@ -10,7 +10,7 @@ import type { MinerConfig } from './config.js';
 import { postBlock } from './http.js';
 import { HelperPool, staleHelperWarnings } from './helperPool.js';
 import { VerifierPool, verifyBlocksParallel } from './verify.js';
-import { ChainSync } from './sync.js';
+import { ChainSync, STATE_RETAIN } from './sync.js';
 import { buildTemplate, type Template } from './template.js';
 import { GrindPool } from './grindPool.js';
 import { NATIVE_BIN, NativeGrindPool } from './nativeGrindPool.js';
@@ -396,6 +396,7 @@ export async function runMiner(
     getBlocks: (from, max, preferBase) => helperPool.getBlocks(from, max, undefined, preferBase),
     verifyBlocksParallel: (blocks, cores) =>
       verifierPool && !verifierTerminated ? verifierPool.verify(blocks) : verifyBlocksParallel(blocks, cores),
+    stateRetain: STATE_RETAIN,
   });
 
   // ── Cold start: restore snapshot → bootstrap → integrity gate ──

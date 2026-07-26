@@ -6,7 +6,7 @@ import { dropBlankPoolEnv, loadEnvLocalKeys } from './envLocal.js';
 import { runMiner } from './miner.js';
 import { runPoolClient } from './poolClient.js';
 import { Blockchain } from './../chain/blockchain.js';
-import { ChainSync } from './sync.js';
+import { ChainSync, STATE_RETAIN } from './sync.js';
 import { getBlocks, getTip } from './http.js';
 import { VerifierPool } from './verify.js';
 import { buildTemplate, type Template } from './template.js';
@@ -95,6 +95,7 @@ async function dryrun(): Promise<void> {
     cores: cfg.workers,
     getBlocks: (from, max) => getBlocks(cfg.helpers[0]!, from, max),
     verifyBlocksParallel: (blocks) => pool.verify(blocks),
+    stateRetain: STATE_RETAIN,
   });
 
   // Learn the tip up front so progress has a denominator. A failed read just

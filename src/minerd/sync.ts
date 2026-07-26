@@ -16,6 +16,15 @@ const CATCHUP_WIDEN_FACTOR = 5;
 const CATCHUP_MAX_OVERLAP = SNAPSHOT_DEPTH - 10; // = 90; comfortably above the anchor
 const YIELD_EVERY = 32; // yield a macrotask every N blocks so timers/keypresses run
 
+// How many blocks behind the tip keep a MATERIALIZED state. Derived from
+// SNAPSHOT_DEPTH on purpose: the snapshot anchor at `tip - SNAPSHOT_DEPTH` is the
+// deepest buried state anything reads (snapshotAt; chainIntegrityOK reads tipState),
+// so a retain window at or below it would make saveSnapshot silently skip — warm
+// start would die with no error. Deriving it makes that inversion unrepresentable.
+// 64 blocks of margin also sits well above CATCHUP_MAX_OVERLAP (90 < 164), so a
+// routine widened reorg never reaches a pruned parent.
+export const STATE_RETAIN = SNAPSHOT_DEPTH + 64; // = 164 blocks, ~22 MB
+
 /** An observed remote tip. `sourceBase` is the helper that CLAIMED it — block
  *  fetches chase the claim through that helper first, so a tip learned from one
  *  helper is never pursued through a different, staler one (which returns an
