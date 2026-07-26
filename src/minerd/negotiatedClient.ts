@@ -714,6 +714,10 @@ export async function runNegotiatedPoolClient(
   let resultWatchdog: ReturnType<typeof setTimeout> | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let syncing = false;
+  // One warn per stale-source episode: set on the first STALLED catch-up round,
+  // cleared by any healthy round. Session-scoped, not per-connection — helper
+  // staleness is not a property of the WS generation.
+  let staleSourceEpisode = false;
   let windowHashes = 0;
 
   const send = (msg: object): void => {
@@ -822,8 +826,9 @@ export async function runNegotiatedPoolClient(
           stateRetain: STATE_RETAIN,
         });
         syncing = true;
+        let changed = false;
         try {
-          await connSync.catchUp({ height: info.height, tipHash: info.tipHash });
+          changed = await connSync.catchUp({ height: info.height, tipHash: info.tipHash });
         } catch (e) {
           if ((e as Error)?.name === 'AbortError') return;
           if (sessionOver(sock)) return;
@@ -838,9 +843,28 @@ export async function runNegotiatedPoolClient(
         // The catch-up above is the one await in this function: re-check that the
         // session is still live before arming any timer or sending anything.
         if (sessionOver(sock)) return;
-        const wanted = (lastChainInfo ?? info).tipHash;
-        if (bytesToHex(chain.tip.hash) !== wanted && !chain.hasBlock(wanted)) {
-          // Helpers haven't served the pool's tip yet — retry shortly.
+        const latest = lastChainInfo ?? info;
+        const reachedTip = bytesToHex(chain.tip.hash) === latest.tipHash || chain.hasBlock(latest.tipHash);
+        // Freshness bookkeeping — only rounds where the catch-up RAN and RETURNED
+        // learn anything about the serving helper (a thrown round is connectivity,
+        // already recorded inside getBlocks; see noteCatchUpRound's contract).
+        const round = classifyCatchUpRound({ changed, reachedTip });
+        helperPool.noteCatchUpRound(round === 'stalled');
+        if (round === 'stalled') {
+          // The stale-source signature: an answering helper that cannot serve the
+          // pool's announced tip. Warn ONCE per episode; the rotation pressure
+          // above evicts the source after STALE_ROTATE_ROUNDS. Deliberately no
+          // grind.stop() — a running grind on an accepted template stays valid to
+          // the pool while our chain source recovers.
+          if (!staleSourceEpisode) {
+            staleSourceEpisode = true;
+            reporter.event('warn', `[nego-miner] ${helperPool.primary()} answered but cannot serve the pool's announced tip (pool height ${latest.height.toLocaleString('en-US')}, ours ${chain.height.toLocaleString('en-US')}) — rotating chain source if this persists`);
+          }
+        } else {
+          staleSourceEpisode = false;
+        }
+        if (!reachedTip) {
+          // Chain source hasn't served the pool's tip yet — retry shortly.
           scheduleRegister(RETRY_BUILD_DELAY_MS);
           return;
         }
