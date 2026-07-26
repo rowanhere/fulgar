@@ -109,6 +109,33 @@ export class HelperPool {
     }
   }
 
+  /** Freshness bookkeeping for chain catch-up rounds. Negotiated mode has no
+   *  getBestTip poll — its tip is the POOL's WS announcement — so this is the
+   *  only staleness signal on that path. A STALLED round (helpers answered,
+   *  but the chain neither changed nor reached the announced tip) counts
+   *  against the primary's staleness streak; at STALE_ROTATE_ROUNDS the role
+   *  advances to the next helper in rotation order (there is no claimant to
+   *  hand to). A healthy round clears the streak. Callers must only call this
+   *  for a catch-up that RAN and RETURNED — a thrown round is connectivity
+   *  (recorded inside getBlocks already) and a round that learned nothing must
+   *  not clear or grow a freshness streak. The successor starts with a clean
+   *  slate on BOTH streaks: an inherited count would hand the role off after a
+   *  single bad round. Attribution note: the caller cannot know which helper
+   *  served a stalled round (first-success inside getBlocks), so pressure
+   *  lands on the primary; if a fallback served it, the primary took a
+   *  connectivity strike in that same round anyway — either streak reaching
+   *  the threshold rotates, so a stale source is evicted regardless. */
+  noteCatchUpRound(stalled: boolean): void {
+    if (!stalled) { this.primaryStale = 0; return; }
+    this.primaryStale++;
+    if (this.primaryStale >= STALE_ROTATE_ROUNDS && this.helpers.length > 1) {
+      this.primaryIdx = (this.primaryIdx + 1) % this.helpers.length;
+      this.primaryStale = 0;
+      this.primaryFails = 0;
+      this.onInfo(`[minerd] switching primary helper to ${this.primary()} (previous primary cannot serve the announced network tip)`);
+    }
+  }
+
   /** One failover round: try each helper once from the primary; first success wins.
    *  A caller AbortError propagates immediately (never retried/failed-over). */
   private async round<T>(label: string, attempt: (base: string) => Promise<T>, preferBase?: string): Promise<T> {

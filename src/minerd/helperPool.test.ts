@@ -323,3 +323,48 @@ test('an all-helpers-down round does not clear the stale streak (alternating sta
   }
   assert.equal(pool.primary(), B, 'outage rounds must not reset the streak accrued by stale answers');
 });
+
+test('noteCatchUpRound: 3 consecutive stalled rounds rotate the primary +1', () => {
+  const infos: string[] = [];
+  const pool = new HelperPool([A, B, C], { onDebug() {}, onInfo: (m) => infos.push(m) });
+  pool.noteCatchUpRound(true);
+  pool.noteCatchUpRound(true);
+  assert.equal(pool.primary(), A); // hysteresis — not yet
+  pool.noteCatchUpRound(true);
+  assert.equal(pool.primary(), B); // rotated to the NEXT helper (no claimant to hand to)
+  assert.equal(infos.length, 1);
+  assert.match(infos[0]!, /b\.example/);
+});
+
+test('noteCatchUpRound: a healthy round clears the staleness streak', () => {
+  const pool = new HelperPool([A, B], sink);
+  pool.noteCatchUpRound(true);
+  pool.noteCatchUpRound(true);
+  pool.noteCatchUpRound(false); // blocks flowed or we converged — genuine healthy answer
+  pool.noteCatchUpRound(true);
+  pool.noteCatchUpRound(true);
+  assert.equal(pool.primary(), A); // never 3 consecutive
+});
+
+test('noteCatchUpRound: rotation hands the successor a clean connectivity streak too', async () => {
+  const down = new Set([A]); // which helpers currently hard-fail getTip
+  const pool = new HelperPool([A, B], {
+    ...sink, sleep: noSleep, rotateThreshold: 3,
+    getTip: async (base) => { if (down.has(base)) throw new Error('down'); return tip(1); },
+  });
+  await pool.getTip(); await pool.getTip(); // primaryFails = 2 against A
+  down.delete(A);
+  pool.noteCatchUpRound(true); pool.noteCatchUpRound(true); pool.noteCatchUpRound(true);
+  assert.equal(pool.primary(), B); // stale rotation
+  down.add(B); // successor starts hard-failing
+  await pool.getTip(); // B fails, A serves → would be streak 3 if inherited
+  assert.equal(pool.primary(), B); // clean slate: 1 < 3, still primary
+  await pool.getTip(); await pool.getTip(); // 3 consecutive now
+  assert.equal(pool.primary(), A); // rotates only after its OWN 3
+});
+
+test('noteCatchUpRound: a single-helper pool never rotates', () => {
+  const pool = new HelperPool([A], sink);
+  for (let i = 0; i < 5; i++) pool.noteCatchUpRound(true);
+  assert.equal(pool.primary(), A);
+});
