@@ -120,10 +120,13 @@ export class HelperPool {
    *  (recorded inside getBlocks already) and a round that learned nothing must
    *  not clear or grow a freshness streak. The successor starts clean of
    *  INHERITED counts on both streaks (an inherited count would hand the role
-   *  off after a single bad round) — its OWN rounds charge it, including a
-   *  catch-up round it finished after a mid-round connectivity rotation put it
-   *  in the role (it served that round's answer, so the strike is its own
-   *  evidence, not the predecessor's). Attribution note: the caller cannot know which helper
+   *  off after a single bad round) — but a stalled catch-up round that ENDS on
+   *  its watch charges it, even in the rare interleaving where a mid-round
+   *  rotation plus a recovered predecessor means another helper served the
+   *  terminal page (exact attribution would need the failover round to report
+   *  who served — a wrongly-charged healthy helper clears on its next healthy
+   *  round, and the rotation walk converges either way).
+   *  Attribution note: the caller cannot know which helper
    *  served a stalled round (first-success inside getBlocks), so pressure
    *  lands on the primary; if a fallback served it, the primary took a
    *  connectivity strike in that same round anyway — either streak reaching
