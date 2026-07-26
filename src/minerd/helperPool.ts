@@ -118,9 +118,12 @@ export class HelperPool {
    *  hand to). A healthy round clears the streak. Callers must only call this
    *  for a catch-up that RAN and RETURNED — a thrown round is connectivity
    *  (recorded inside getBlocks already) and a round that learned nothing must
-   *  not clear or grow a freshness streak. The successor starts with a clean
-   *  slate on BOTH streaks: an inherited count would hand the role off after a
-   *  single bad round. Attribution note: the caller cannot know which helper
+   *  not clear or grow a freshness streak. The successor starts clean of
+   *  INHERITED counts on both streaks (an inherited count would hand the role
+   *  off after a single bad round) — its OWN rounds charge it, including a
+   *  catch-up round it finished after a mid-round connectivity rotation put it
+   *  in the role (it served that round's answer, so the strike is its own
+   *  evidence, not the predecessor's). Attribution note: the caller cannot know which helper
    *  served a stalled round (first-success inside getBlocks), so pressure
    *  lands on the primary; if a fallback served it, the primary took a
    *  connectivity strike in that same round anyway — either streak reaching
