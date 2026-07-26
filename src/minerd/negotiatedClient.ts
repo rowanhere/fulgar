@@ -305,6 +305,23 @@ export function poolWsUrl(poolUrl: string): string {
     .replace(/^https?:/i, (m) => (m.toLowerCase() === 'https:' ? 'wss:' : 'ws:')) + '/ws';
 }
 
+/**
+ * Classify one catch-up round of the negotiated register path.
+ *
+ * `reachedTip` (we hold the pool's announced tip) wins over `changed`: a round
+ * that lands on the tip is converged however it got there. A round that moved
+ * the chain but fell short is ordinary propagation lag — the helpers ARE
+ * serving. A round that neither changed the chain nor reached the tip is the
+ * stale-source signature: the helper that answered cannot serve the pool's
+ * announced tip (e.g. a wedged-but-answering helper returning empty pages) and
+ * must not be treated as authoritative for the next round. Exported for tests.
+ */
+export type CatchUpRound = 'converged' | 'progressing' | 'stalled';
+export function classifyCatchUpRound(i: { changed: boolean; reachedTip: boolean }): CatchUpRound {
+  if (i.reachedTip) return 'converged';
+  return i.changed ? 'progressing' : 'stalled';
+}
+
 /** A share/template target must be non-empty hex (no 0x). A missing or malformed
  *  poolTargetHex would reach the workers as "undefined"/"null" and throw
  *  `BigInt('0xundefined')`, triggering a crash-respawn storm. Exported for tests. */

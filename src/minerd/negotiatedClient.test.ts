@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  buildNegotiatedTemplate, classifyTemplateResult, decodeMempool, headerMatchesTemplate,
-  isHexTarget, mempoolEntryAcceptable, negotiatedRequired, parseFrame, poolWsUrl,
-  pruneOutstanding, settleOutstanding, negotiatedColdStart, type NegotiatedColdStartDeps,
+  buildNegotiatedTemplate, classifyCatchUpRound, classifyTemplateResult, decodeMempool,
+  headerMatchesTemplate, isHexTarget, mempoolEntryAcceptable, negotiatedRequired, parseFrame,
+  poolWsUrl, pruneOutstanding, settleOutstanding, negotiatedColdStart, type NegotiatedColdStartDeps,
   negotiatedBackendNote, NEGOTIATED_BANNER,
 } from './negotiatedClient.js';
 import type { RestoreOutcome } from './persistence.js';
@@ -170,6 +170,19 @@ test('classifyTemplateResult: an acceptance correlates itself, a rejection only 
   // where the list was cleared while the pool's answer was still in transit.
   assert.equal(classifyTemplateResult(false, 1), 'ignore-ambiguous');
   assert.equal(classifyTemplateResult(false, 9), 'ignore-ambiguous');
+});
+
+test('classifyCatchUpRound: reaching the announced tip is converged regardless of change', () => {
+  assert.equal(classifyCatchUpRound({ changed: true, reachedTip: true }), 'converged');
+  assert.equal(classifyCatchUpRound({ changed: false, reachedTip: true }), 'converged');
+});
+
+test('classifyCatchUpRound: progress without convergence is progressing (stays silent)', () => {
+  assert.equal(classifyCatchUpRound({ changed: true, reachedTip: false }), 'progressing');
+});
+
+test('classifyCatchUpRound: no change while short of the announced tip is the stale-source signature', () => {
+  assert.equal(classifyCatchUpRound({ changed: false, reachedTip: false }), 'stalled');
 });
 
 test('pruneOutstanding: retires by AGE, so a slow pool cannot be evicted by count alone', () => {
