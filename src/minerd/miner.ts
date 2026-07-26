@@ -763,6 +763,13 @@ export async function runMiner(
       );
       const hash = bytesToHex(hashHeader(out.block.header));
       const accepted = out.adopted;
+      // An adopted solve is the ONE chain advance that does not come through a
+      // ChainSync page, so it is the one that would otherwise never be pruned:
+      // once the helper holds our block the tip poller sees an identical tip and
+      // never calls catchUp, and a catchUp that does run returns on the hasBlock
+      // fast path before applyBatch. Prune here so every path that materializes
+      // state also retires it (idempotent, and O(1) with one block newly buried).
+      if (out.adopted) chain.pruneStateBelow(chain.height - STATE_RETAIN);
       reporter.found({
         height: out.block.header.height,
         hash,
