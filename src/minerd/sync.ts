@@ -16,14 +16,27 @@ const CATCHUP_WIDEN_FACTOR = 5;
 const CATCHUP_MAX_OVERLAP = SNAPSHOT_DEPTH - 10; // = 90; comfortably above the anchor
 const YIELD_EVERY = 32; // yield a macrotask every N blocks so timers/keypresses run
 
-// How many blocks behind the tip keep a MATERIALIZED state. Derived from
-// SNAPSHOT_DEPTH on purpose: the snapshot anchor at `tip - SNAPSHOT_DEPTH` is the
-// deepest buried state anything reads (snapshotAt; chainIntegrityOK reads tipState),
-// so a retain window at or below it would make saveSnapshot silently skip — warm
-// start would die with no error. Deriving it makes that inversion unrepresentable.
-// 64 blocks of margin also sits well above CATCHUP_MAX_OVERLAP (90 < 164), so a
-// routine widened reorg never reaches a pruned parent.
-export const STATE_RETAIN = SNAPSHOT_DEPTH + 64; // = 164 blocks, ~22 MB
+// How many blocks behind the tip keep a MATERIALIZED state. This constant is
+// load-bearing in BOTH directions, so it is derived rather than picked:
+//
+//  • Lower bound — it must exceed SNAPSHOT_DEPTH. The snapshot anchor at
+//    `tip - SNAPSHOT_DEPTH` is the deepest buried state anything reads
+//    (`snapshotAt`; `chainIntegrityOK` reads only `tipState`), so a window at or
+//    below it makes `saveSnapshot` silently skip and warm start dies with no
+//    error anywhere. Deriving from SNAPSHOT_DEPTH makes that inversion
+//    unrepresentable.
+//  • Upper side — it also caps how deep a reorg can be validated in memory.
+//    `catchUp` fetches from `min(localHeight, remoteHeight) - overlap`, so a
+//    heavier-but-SHORTER remote tip needs a parent at local depth
+//    `(H - R) + CATCHUP_MAX_OVERLAP + 1`; beyond the window that surfaces as
+//    'parent state unavailable' → snapshot invalidation → full replay (correct,
+//    but minutes of downtime). Tolerance = STATE_RETAIN - 91, so a full fetch
+//    page of headroom past the anchor buys ~209 blocks of it.
+//
+// Bounding memory necessarily bounds that depth — before pruning existed the
+// tolerance grew with uptime only because memory did. PAGE of headroom is the
+// deliberate trade at ~41 MB.
+export const STATE_RETAIN = SNAPSHOT_DEPTH + PAGE; // = 300 blocks, ~41 MB
 
 /** An observed remote tip. `sourceBase` is the helper that CLAIMED it — block
  *  fetches chase the claim through that helper first, so a tip learned from one
