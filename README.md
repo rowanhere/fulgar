@@ -12,7 +12,7 @@
   <img src="https://img.shields.io/badge/node-%E2%89%A520.6-339933?logo=nodedotjs&logoColor=white" alt="node >=20.6">
   <img src="https://img.shields.io/badge/engine-WASM%20%7C%20native%20Rust-B7410E?logo=rust&logoColor=white" alt="engine: WASM or native Rust">
   <img src="https://img.shields.io/badge/PoW-Argon2id%20to%20Sandglass%20v3-1F62D6" alt="PoW: Argon2id to Sandglass v3">
-  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20(exp.)-1F62D6" alt="platform: macOS | Windows (experimental)">
+  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-1F62D6" alt="platform: macOS | Windows">
   <img src="https://img.shields.io/badge/pool-FulgurPool-1F62D6" alt="pool: FulgurPool">
   <img src="https://img.shields.io/badge/license-MIT-3FB950" alt="license: MIT">
 </p>
@@ -29,7 +29,7 @@ FulgurMiner is a standalone command-line miner for [BrowserCoin](https://browser
 - **It's not a browser tab.** It runs headless in your terminal — no open window, no foreground requirement. Run it on a server, or just leave it going in the background.
 - **It never gets throttled.** FulgurMiner runs the *same* proof-of-work as the browser miner, but **headless** and across **every CPU core at full power**. A browser tab is just as fast per core *while you're looking at it* — but the moment you switch tabs or apps, the browser parks it on efficiency cores and it drops to a fraction of the speed (measured **280 → 49 H/s per core** on an Apple M5 once the tab is backgrounded). FulgurMiner runs in the background, on servers, across all cores, and **never slows down**. See the graph below.
 - **It tunes itself.** **Smart mode** finds the highest throttle your machine sustains on its own. The **Considerate** profile goes further — it adapts to whatever else you're doing: when your other apps need the CPU it eases off, when they go quiet it ramps back up, mining just the spare capacity. Set it once and forget it.
-- **macOS and Windows.** Developed and tested on macOS. **Windows is experimental** — it should work, but it hasn't been tested on a Windows machine yet, so feedback is very welcome.
+- **macOS and Windows.** Developed on macOS; **Windows is community-proven** — miners run it in the field on Windows 11, including the native engine, which a contributor built and benchmarked there. On legacy consoles the dashboard automatically falls back to plain text (see [Troubleshooting](#troubleshooting)). Feedback is still welcome.
 
 ### Performance
 
