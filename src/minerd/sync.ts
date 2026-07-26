@@ -16,27 +16,36 @@ const CATCHUP_WIDEN_FACTOR = 5;
 const CATCHUP_MAX_OVERLAP = SNAPSHOT_DEPTH - 10; // = 90; comfortably above the anchor
 const YIELD_EVERY = 32; // yield a macrotask every N blocks so timers/keypresses run
 
-// How many blocks behind the tip keep a MATERIALIZED state. This constant is
-// load-bearing in BOTH directions, so it is derived rather than picked:
+// Reorg headroom kept beyond the snapshot anchor, in blocks. A deliberate policy
+// knob, NOT derived from PAGE: coupling retention to the fetch page size would
+// silently move the reorg tolerance below whenever pagination is retuned, and the
+// two have no reason to move together.
+const STATE_RETAIN_MARGIN = 200;
+
+// How many blocks behind the tip keep a MATERIALIZED state. Load-bearing in BOTH
+// directions, so it is derived from SNAPSHOT_DEPTH rather than picked outright:
 //
-//  • Lower bound — it must exceed SNAPSHOT_DEPTH. The snapshot anchor at
-//    `tip - SNAPSHOT_DEPTH` is the deepest buried state anything reads
-//    (`snapshotAt`; `chainIntegrityOK` reads only `tipState`), so a window at or
-//    below it makes `saveSnapshot` silently skip and warm start dies with no
-//    error anywhere. Deriving from SNAPSHOT_DEPTH makes that inversion
-//    unrepresentable.
-//  • Upper side — it also caps how deep a reorg can be validated in memory.
-//    `catchUp` fetches from `min(localHeight, remoteHeight) - overlap`, so a
-//    heavier-but-SHORTER remote tip needs a parent at local depth
-//    `(H - R) + CATCHUP_MAX_OVERLAP + 1`; beyond the window that surfaces as
-//    'parent state unavailable' → snapshot invalidation → full replay (correct,
-//    but minutes of downtime). Tolerance = STATE_RETAIN - 91, so a full fetch
-//    page of headroom past the anchor buys ~209 blocks of it.
+//  • Lower side — `STATE_RETAIN >= SNAPSHOT_DEPTH` is required. Pruning nulls
+//    state strictly BELOW `tip - STATE_RETAIN`, so equality already preserves the
+//    snapshot anchor at `tip - SNAPSHOT_DEPTH` — the deepest buried state anything
+//    reads (`snapshotAt`; `chainIntegrityOK` reads only `tipState`). Go under it and
+//    `saveSnapshot` silently skips: warm start dies with no error anywhere.
+//    Deriving from SNAPSHOT_DEPTH makes that inversion unrepresentable.
+//  • Upper side — the window also caps how deep a reorg can be validated in
+//    memory, because validation needs a materialized `parent.state`. `catchUp`
+//    fetches from `min(localHeight, remoteHeight) - overlap`, so a heavier-but-
+//    SHORTER remote tip needs a parent at local depth
+//    `(H - R) + CATCHUP_MAX_OVERLAP + 1`. Beyond the window that surfaces as
+//    'parent state unavailable' → snapshot invalidation → full replay: correct,
+//    but minutes of downtime. Guaranteed height-deficit tolerance is therefore
+//    `STATE_RETAIN - (CATCHUP_MAX_OVERLAP + 1)`; shallower forks can survive a
+//    larger deficit, so treat that as the floor, not a universal reorg limit.
 //
-// Bounding memory necessarily bounds that depth — before pruning existed the
-// tolerance grew with uptime only because memory did. PAGE of headroom is the
-// deliberate trade at ~41 MB.
-export const STATE_RETAIN = SNAPSHOT_DEPTH + PAGE; // = 300 blocks, ~41 MB
+// Bounding memory bounds that depth — before pruning existed, tolerance grew with
+// every block retained only because memory did. The margin is the explicit trade.
+// Peak materialization is ~`STATE_RETAIN + PAGE` states mid-page, before the
+// end-of-page prune.
+export const STATE_RETAIN = SNAPSHOT_DEPTH + STATE_RETAIN_MARGIN;
 
 /** An observed remote tip. `sourceBase` is the helper that CLAIMED it — block
  *  fetches chase the claim through that helper first, so a tip learned from one
