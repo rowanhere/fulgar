@@ -32,6 +32,10 @@ export interface SyncDeps {
   verifyBlocksParallel: (blocks: Block[], cores: number) => Promise<boolean[]>;
   /** Optional: called after each page is applied, with the new chain height. */
   onProgress?: (height: number) => void;
+  /** OPTIONAL: cap in-memory state to ~this many blocks behind the tip, so a long
+   *  sync / long-running miner doesn't keep one materialized state clone per block.
+   *  Callers pass STATE_RETAIN; undefined = never prune (the pre-0.8.1 behavior). */
+  stateRetain?: number;
 }
 
 export class ChainSync {
@@ -156,6 +160,16 @@ export class ChainSync {
       if (i % YIELD_EVERY === YIELD_EVERY - 1) {
         await new Promise((r) => setImmediate(r));
       }
+    }
+    // Cap in-memory chain state to ~stateRetain blocks behind the tip so the genesis
+    // sync — and a long-running miner — don't accumulate one materialized state clone
+    // per block (~136 KB each at the current account count) → OOM. Once per applied
+    // page and amortized O(1) per newly-buried block. minHeight stays well below the
+    // deepest buried-state read (snapshotAt at tip − SNAPSHOT_DEPTH) and below the
+    // catchUp widen cap, so warm start and routine reorgs are never starved; a no-op
+    // while the chain is shorter than stateRetain (pruneStateBelow returns early).
+    if (this.deps.stateRetain !== undefined) {
+      this.chain.pruneStateBelow(this.chain.height - this.deps.stateRetain);
     }
     // Surface a count so callers (and logging) can distinguish a fully-rejected
     // page (every block refused) from one where some blocks were applied.

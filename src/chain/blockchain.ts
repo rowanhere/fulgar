@@ -186,6 +186,44 @@ export class Blockchain {
     return out.reverse();
   }
 
+  /**
+   * Bound in-memory chain state: null the materialized `state` of canonical blocks
+   * whose height is strictly below `minHeight`, keeping the tip down to `minHeight`
+   * (plus genesis) materialized. Walks the canonical chain down from the tip and stops
+   * at the first already-pruned block, so it is amortized O(1) per newly-buried block.
+   * OPT-IN — only the long-running headless/pool sync calls this (to cap memory on a
+   * small host); the default in-browser chain never prunes, so its snapshot/restore
+   * model is byte-unchanged.
+   *
+   * SAFETY: prunes only blocks BELOW `minHeight`, so a caller MUST keep `minHeight` at
+   * or below the deepest height it ever reads non-tip state for. The pool reads buried
+   * state only at `tip - confirmations` (confirmedHotNonce) and passes
+   * `minHeight = tip - (confirmations + margin)`, so the confirmation anchor is always
+   * retained. A reorg deeper than the retained window would surface "parent state
+   * unavailable" in addBlock — but the pool's catchUp widens only up to the finality
+   * horizon `confirmations − 2` (R4), so it can absorb reorgs at most `confirmations − 1`
+   * deep — always inside the retained margin — and confirmedHotNonce additionally degrades
+   * safely when a buried state is missing. Never touches the tip (always materialized) or
+   * genesis (height 0). Non-canonical fork blocks (rare) are left as-is.
+   */
+  pruneStateBelow(minHeight: number): void {
+    if (minHeight <= 1) return; // nothing buried deep enough yet — keep genesis + block 1
+    let cursor: string | undefined = this.tipHash;
+    while (cursor) {
+      const entry = this.blocks.get(cursor);
+      if (!entry) break;
+      const h = entry.block.header.height;
+      // Defensive: never null the tip (tipState + block extension depend on it being
+      // materialized), even if a caller passes an absurd minHeight above the tip height.
+      if (cursor !== this.tipHash && h > 0 && h < minHeight) {
+        if (entry.state === null) break; // everything below is already pruned → done
+        entry.state = null;
+      }
+      if (h === 0) break;                // reached genesis
+      cursor = bytesToHex(entry.block.header.prevHash);
+    }
+  }
+
   /** The script context the NEXT block (built on `parentHashHex`) will validate under. */
   nextBlockScriptContext(parentHashHex: string = this.tipHash): { scriptsActive: boolean; blockMtp: number } {
     const mtp = medianTimePast(this.getRecentHeaders(MTP_WINDOW, parentHashHex));
