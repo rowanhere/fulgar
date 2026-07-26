@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import {
   buildNegotiatedTemplate, classifyCatchUpRound, classifyTemplateResult, decodeMempool,
   headerMatchesTemplate, isHexTarget, mempoolEntryAcceptable, negotiatedRequired, parseFrame,
-  poolWsUrl, pruneOutstanding, settleOutstanding, negotiatedColdStart, type NegotiatedColdStartDeps,
+  poolWsUrl, pruneOutstanding, settleOutstanding, shouldWarnStaleSource,
+  negotiatedColdStart, type NegotiatedColdStartDeps,
   negotiatedBackendNote, NEGOTIATED_BANNER,
 } from './negotiatedClient.js';
 import type { RestoreOutcome } from './persistence.js';
@@ -183,6 +184,14 @@ test('classifyCatchUpRound: progress without convergence is progressing (stays s
 
 test('classifyCatchUpRound: no change while short of the announced tip is the stale-source signature', () => {
   assert.equal(classifyCatchUpRound({ changed: false, reachedTip: false }), 'stalled');
+});
+
+test('shouldWarnStaleSource: stalled + a real gap, once per episode — a 1-block gap is a propagation race', () => {
+  assert.equal(shouldWarnStaleSource('stalled', 2, false), true);
+  assert.equal(shouldWarnStaleSource('stalled', 1, false), false); // the pool's own fresh block, not yet at the helpers
+  assert.equal(shouldWarnStaleSource('stalled', 5, true), false);  // already warned this episode
+  assert.equal(shouldWarnStaleSource('progressing', 9, false), false);
+  assert.equal(shouldWarnStaleSource('converged', 0, false), false);
 });
 
 test('pruneOutstanding: retires by AGE, so a slow pool cannot be evicted by count alone', () => {

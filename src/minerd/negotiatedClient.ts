@@ -35,7 +35,7 @@ import { decodeTx, encodeTx, validateTxStructure, type Transaction } from '../ch
 import { bytesToHex, hexToBytes } from '../util/binary.js';
 import { resolveHelpers } from './config.js';
 import { GrindPool } from './grindPool.js';
-import { HelperPool } from './helperPool.js';
+import { HelperPool, STALE_WARN_BLOCKS } from './helperPool.js';
 import { NativeGrindPool } from './nativeGrindPool.js';
 import { resolvePoolEngine, type PoolEngineChoice } from './poolEngine.js';
 import { perfHints, nodeMajorOf } from './perfAdvice.js';
@@ -320,6 +320,17 @@ export type CatchUpRound = 'converged' | 'progressing' | 'stalled';
 export function classifyCatchUpRound(i: { changed: boolean; reachedTip: boolean }): CatchUpRound {
   if (i.reachedTip) return 'converged';
   return i.changed ? 'progressing' : 'stalled';
+}
+
+/** Should a stalled catch-up round be surfaced to the user? Only once per
+ *  episode, and only when we are ≥ STALE_WARN_BLOCKS behind the announced
+ *  tip — a 1-block gap is routinely just the pool announcing its own
+ *  freshly-found block before it propagates to the helpers (the same reasoning
+ *  behind solo's STALE_WARN_BLOCKS). Rotation pressure is deliberately NOT
+ *  gated on the gap: it has its own 3-round hysteresis, which a propagation
+ *  race never sustains. Exported for unit tests. */
+export function shouldWarnStaleSource(round: CatchUpRound, behindBy: number, inEpisode: boolean): boolean {
+  return round === 'stalled' && behindBy >= STALE_WARN_BLOCKS && !inEpisode;
 }
 
 /** A share/template target must be non-empty hex (no 0x). A missing or malformed
@@ -849,16 +860,21 @@ export async function runNegotiatedPoolClient(
         // learn anything about the serving helper (a thrown round is connectivity,
         // already recorded inside getBlocks; see noteCatchUpRound's contract).
         const round = classifyCatchUpRound({ changed, reachedTip });
+        // Capture the name BEFORE the note — the 3rd stalled round rotates the
+        // primary inside it, and the warn must name the stale source, never its
+        // successor.
+        const primaryBase = helperPool.primary();
         helperPool.noteCatchUpRound(round === 'stalled');
         if (round === 'stalled') {
           // The stale-source signature: an answering helper that cannot serve the
-          // pool's announced tip. Warn ONCE per episode; the rotation pressure
-          // above evicts the source after STALE_ROTATE_ROUNDS. Deliberately no
-          // grind.stop() — a running grind on an accepted template stays valid to
-          // the pool while our chain source recovers.
-          if (!staleSourceEpisode) {
+          // pool's announced tip. Warn ONCE per episode (and only past the
+          // propagation-race gap — see shouldWarnStaleSource); the rotation
+          // pressure above evicts the source after STALE_ROTATE_ROUNDS.
+          // Deliberately no grind.stop() — a running grind on an accepted
+          // template stays valid to the pool while our chain source recovers.
+          if (shouldWarnStaleSource(round, latest.height - chain.height, staleSourceEpisode)) {
             staleSourceEpisode = true;
-            reporter.event('warn', `[nego-miner] ${helperPool.primary()} answered but cannot serve the pool's announced tip (pool height ${latest.height.toLocaleString('en-US')}, ours ${chain.height.toLocaleString('en-US')}) — rotating chain source if this persists`);
+            reporter.event('warn', `[nego-miner] ${primaryBase} answered but cannot serve the pool's announced tip (pool height ${latest.height.toLocaleString('en-US')}, ours ${chain.height.toLocaleString('en-US')}) — rotating chain source if this persists`);
           }
         } else {
           staleSourceEpisode = false;
