@@ -178,6 +178,8 @@ export interface CoordinatorDeps {
   syncCatchUp: (remoteTip?: { height: number; tipHash: string; sourceBase?: string }) => Promise<boolean>;
   onLog: (msg: string) => void;
   retryRebuildMs?: number;
+  /** Current chain tip hash — the pending-solve drain's validity check. */
+  tipHash: () => Uint8Array;
 }
 
 /** Pure coordination logic: busy-flag, rebuild-on-solve, rebuild-on-exhaust, tip-advance. */
@@ -186,6 +188,12 @@ export class MinerCoordinator {
   private busy = false;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private disposed = false;
+  /** A solve that arrived while `busy` was held (a catch-up or another submit
+   *  owned the chain). ONE slot: a newer solve for the same template supersedes
+   *  an older one, and a solve for an OLDER template cannot exist (`current`
+   *  only moves via rebuilds, which never run while busy). Drained after every
+   *  busy op; validity is decided THEN, against the then-current tip. */
+  private pendingSolve: { template: Template; nonce: number } | null = null;
 
   constructor(private readonly deps: CoordinatorDeps) {}
 
@@ -244,6 +252,7 @@ export class MinerCoordinator {
 
   dispose(): void {
     this.disposed = true;
+    this.pendingSolve = null;
     if (this.retryTimer !== null) {
       clearTimeout(this.retryTimer);
       this.retryTimer = null;
@@ -251,7 +260,15 @@ export class MinerCoordinator {
   }
 
   private async onSolved(nonce: number): Promise<void> {
-    if (this.busy || !this.current) return;
+    if (!this.current) return;
+    if (this.busy) {
+      // A found block is real money — never silently discard it. Queue it; the
+      // drain after the busy op decides against the then-current tip whether it
+      // is still broadcastable or was superseded.
+      this.pendingSolve = { template: this.current, nonce };
+      this.deps.onLog('solve queued (chain busy)');
+      return;
+    }
     this.busy = true;
     // never let the busy flag stick. EVERYTHING after busy=true (incl. poolStop —
     // a synchronous throw there would otherwise stick busy + become an unhandled
@@ -265,9 +282,40 @@ export class MinerCoordinator {
     } catch (e) {
       this.deps.onLog(`error:solo submit failed — ${(e as Error).message}`);
     } finally {
+      await this.drainPendingSolve(true);
       this.busy = false;
       this.safeRebuild();
     }
+  }
+
+  /** Decide a queued solve now that the busy op finished (the CALLER still
+   *  holds `busy`, so no grind can race this). Returns true iff a submit was
+   *  ATTEMPTED (poolStop ran) — the caller then rebuilds exactly like the
+   *  direct-solve path, success or failure. `allowSubmit=false` (the
+   *  tip-advance FAILURE path) always discards: the network may be ahead of us
+   *  and unverifiable there, and broadcasting a possibly-stale parent risks a
+   *  lagging helper accepting it → local adoption → a private fork. Own
+   *  try/catch — a failure here must never stick the busy flag. */
+  private async drainPendingSolve(allowSubmit: boolean): Promise<boolean> {
+    const pending = this.pendingSolve;
+    this.pendingSolve = null;
+    if (!pending || this.disposed) return false;
+    if (!allowSubmit) {
+      this.deps.onLog('solve discarded (catch-up failed — network state unknown)');
+      return false;
+    }
+    if (compareBytes(pending.template.header.prevHash, this.deps.tipHash()) !== 0) {
+      this.deps.onLog('solve superseded by network block — discarded');
+      return false;
+    }
+    try {
+      this.deps.poolStop();
+      const out = await this.deps.submit(pending.template, pending.nonce);
+      this.deps.onLog(`solved:${out.label}`);
+    } catch (e) {
+      this.deps.onLog(`error:solo submit failed — ${(e as Error).message}`);
+    }
+    return true;
   }
 
   private async onExhausted(): Promise<void> {
@@ -282,6 +330,7 @@ export class MinerCoordinator {
   async tipAdvanced(remoteTip?: { height: number; tipHash: string; sourceBase?: string }): Promise<void> {
     if (this.busy) return;
     this.busy = true;
+    let catchUpFailed = false;
     // busy must ALWAYS reset (try/catch/finally) or the miner wedges. On a clean
     // catch-up we stop the stale grind and rebuild on the new tip.
     try {
@@ -300,10 +349,18 @@ export class MinerCoordinator {
       // running: a stale-template solve broadcast to a LAGGING helper could come back
       // 'added' and get adopted locally → a private fork the public chain won't
       // replace. The next tip poll retries the catch-up and rebuilds once it succeeds.
+      catchUpFailed = true;
       this.deps.poolStop();
       this.deps.onLog(`error:catch-up failed — ${(e as Error).message}`);
     } finally {
+      // Drain a solve queued during the catch-up while busy is STILL held. On
+      // the failure path the drain always discards (allowSubmit=false) — see
+      // drainPendingSolve. An attempted submit (success or failure) consumed or
+      // changed grind state → rebuild exactly like the direct-solve path; a
+      // drop changes nothing and must not restart the grind (anti-churn).
+      const attempted = await this.drainPendingSolve(!catchUpFailed);
       this.busy = false;
+      if (attempted) this.safeRebuild();
     }
   }
 }
@@ -743,6 +800,7 @@ export async function runMiner(
   maybeSave();
 
   const coord = new MinerCoordinator({
+    tipHash: () => chain.tip.hash,
     buildTemplate: () => buildTemplate(chain, cfg.minerPubkey),
     poolStart: (headerBytes, targetHex, onSolved, onHashrate, onExhausted) =>
       pool.start(

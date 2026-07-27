@@ -10,12 +10,16 @@ import { MinerCoordinator, type CoordinatorDeps } from './miner.js';
 const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
 const wait = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
+const TIP = new Uint8Array(32);
+const NINE = new Uint8Array(32).fill(9);
+
 function makeCoord(opts: {
   submit?: () => Promise<{ label: string }>;
   catchUp?: () => Promise<void>;
   catchUpChanged?: boolean;
   buildTemplate?: () => any;
   retryRebuildMs?: number;
+  tipHash?: () => Uint8Array;
 } = {}): {
   coord: MinerCoordinator;
   calls: { builds: number; starts: number; stops: number; submits: number; catchUps: number; logs: string[] };
@@ -28,7 +32,7 @@ function makeCoord(opts: {
   const deps: CoordinatorDeps = {
     buildTemplate: () => {
       calls.builds++;
-      return opts.buildTemplate ? opts.buildTemplate() : { header: { height: 1 }, headerBytes: new Uint8Array(), targetHex: 'ff' } as any;
+      return opts.buildTemplate ? opts.buildTemplate() : { header: { height: 1, prevHash: TIP }, headerBytes: new Uint8Array(), targetHex: 'ff' } as any;
     },
     poolStart: (_hb, _tx, onSolved, _onHashrate, onExhausted) => {
       calls.starts++;
@@ -40,6 +44,7 @@ function makeCoord(opts: {
     syncCatchUp: async () => { calls.catchUps++; if (opts.catchUp) await opts.catchUp(); return opts.catchUpChanged ?? true; },
     onLog: (m) => calls.logs.push(m),
     retryRebuildMs: opts.retryRebuildMs,
+    tipHash: () => (opts.tipHash ? opts.tipHash() : TIP),
   };
   const coord = new MinerCoordinator(deps);
   return { coord, calls, solve: (n) => solvedCb!(n), exhaust: () => exhaustedCb!() };
@@ -125,6 +130,7 @@ test('tipAdvanced passes sourceBase through to syncCatchUp untouched', async () 
     submit: async () => ({ label: 'x' }),
     syncCatchUp: async (rt) => { seen = rt; return false; },
     onLog: () => {},
+    tipHash: () => TIP,
   });
   await coord.tipAdvanced({ height: 7, tipHash: 'aa', sourceBase: 'https://x.example' });
   assert.deepEqual(seen, { height: 7, tipHash: 'aa', sourceBase: 'https://x.example' });
@@ -145,6 +151,7 @@ test('HIGH rebuild-guard: a throwing buildTemplate is caught + logged (no unhand
     submit: async () => ({ label: 'h=1' }),
     syncCatchUp: async () => true,
     onLog: (m) => logs.push(m),
+    tipHash: () => TIP,
   };
   const coord = new MinerCoordinator(deps);
   coord.rebuild();   // build #1 ok
@@ -257,4 +264,86 @@ test('a pending rebuild retry DEFERS while a tip catch-up holds busy (no mid-cat
   await wait(15);
   assert.equal(calls.builds, 3, 'no leftover retry fired (tipAdvanced cleared it)');
   coord.dispose();
+});
+
+test('a solve during a NO-OP tip-advance is queued and submitted after (the dropped-reward fix)', async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  const { coord, calls, solve } = makeCoord({ catchUp: () => gate, catchUpChanged: false });
+  coord.rebuild();
+  const adv = coord.tipAdvanced({ height: 2, tipHash: 'aa' });
+  await flush();
+  solve(7); // arrives while the catch-up holds busy
+  await flush();
+  assert.equal(calls.submits, 0, 'queued, not submitted mid-op');
+  assert.ok(calls.logs.some((l) => l.includes('queued')));
+  release();
+  await adv;
+  assert.equal(calls.submits, 1, 'queued solve submitted after the busy op');
+  assert.ok(calls.logs.some((l) => l.startsWith('solved:')));
+  assert.equal(calls.builds, 2, 'rebuilt after the drained submit, like the direct path');
+});
+
+test('a solve during a REAL advance is discarded with the supersede log', async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  const { coord, calls, solve } = makeCoord({ catchUp: () => gate, catchUpChanged: true, tipHash: () => NINE });
+  coord.rebuild();
+  const adv = coord.tipAdvanced({ height: 2, tipHash: 'aa' });
+  await flush();
+  solve(7);
+  await flush();
+  release();
+  await adv;
+  assert.equal(calls.submits, 0, 'a stale-parent solve is never broadcast');
+  assert.ok(calls.logs.some((l) => l.includes('superseded')));
+});
+
+test('a second solve during a submit is dropped once the first adopts (height already won)', async () => {
+  let releaseSubmit!: () => void;
+  const submitGate = new Promise<void>((r) => { releaseSubmit = r; });
+  let tip = TIP;
+  const { coord, calls, solve } = makeCoord({
+    submit: async () => { await submitGate; tip = NINE; return { label: 'h=1' }; },
+    tipHash: () => tip,
+  });
+  coord.rebuild();
+  solve(1); await flush();
+  solve(2); await flush(); // queued behind the in-flight submit
+  assert.equal(calls.submits, 1);
+  releaseSubmit(); await wait(5);
+  assert.equal(calls.submits, 1, 'pending dropped — the tip moved to our own block');
+  assert.ok(calls.logs.some((l) => l.includes('superseded')));
+});
+
+test('the catch-up FAILURE path always discards a queued solve (lagging-helper trap)', async () => {
+  let reject!: (e: Error) => void;
+  const gate = new Promise<void>((_r, rj) => { reject = rj; });
+  const { coord, calls, solve } = makeCoord({ catchUp: () => gate, catchUpChanged: false });
+  coord.rebuild();
+  const adv = coord.tipAdvanced({ height: 2, tipHash: 'aa' });
+  await flush();
+  solve(7);
+  await flush();
+  reject(new Error('network down'));
+  await adv;
+  assert.equal(calls.submits, 0, 'no broadcast when the network state is unverifiable');
+  assert.ok(calls.logs.some((l) => l.includes('discarded')));
+  // No wedge: a later direct solve still processes.
+  solve(8); await flush();
+  assert.equal(calls.submits, 1);
+});
+
+test('dispose() clears a pending solve (nothing submits after dispose)', async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  const { coord, calls, solve } = makeCoord({ catchUp: () => gate, catchUpChanged: false });
+  coord.rebuild();
+  const adv = coord.tipAdvanced({ height: 2, tipHash: 'aa' });
+  await flush();
+  solve(9); await flush();
+  coord.dispose();
+  release();
+  await adv;
+  assert.equal(calls.submits, 0);
 });
