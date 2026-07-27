@@ -516,15 +516,19 @@ export async function runNegotiatedPoolClient(
   }
 
   const startDuty = smartStartDuty(smart, throttle);
+  // Same engine gate as the classic pool path (poolEngine.ts): honor a native
+  // selection, demote to wasm with a persistent visible reason otherwise.
+  // Resolved BEFORE the priority policy on purpose — the gate's probes spawn
+  // subprocesses that inherit our niceness, and a niced probe on a busy box can
+  // time out and wrongly demote a valid native engine (solo/classic order the
+  // same way).
+  const engine = resolvePoolEngine();
+  const backend = engine.useNative ? 'native' : 'wasm';
+  const backendNote = negotiatedBackendNote(engine);
   // Priority parity with the other two paths (negotiated never niced at all —
   // Considerate here ran at full scheduling priority, contradicting its contract).
   const prio = applyPriorityPolicy(smart);
   if (prio.note) reporter.event('info', `[nego-miner] ${prio.note}`);
-  // Same engine gate as the classic pool path (poolEngine.ts): honor a native
-  // selection, demote to wasm with a persistent visible reason otherwise.
-  const engine = resolvePoolEngine();
-  const backend = engine.useNative ? 'native' : 'wasm';
-  const backendNote = negotiatedBackendNote(engine);
   if (status) {
     status.backend = backend;
     status.backendNote = backendNote;
