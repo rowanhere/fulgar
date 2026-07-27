@@ -22,7 +22,7 @@ static constexpr uint32_t SG_MASK = SG_W - 1;
 static constexpr int SG_PER = (1 << 21) / 4;
 static constexpr uint32_t GOLDEN = 0x9e3779b9u;
 static constexpr int DEFAULT_LANES = 1024;
-static constexpr int DEFAULT_NONCES_PER_LANE = 64;
+static constexpr int DEFAULT_NONCES_PER_LANE = 16;
 
 __constant__ uint8_t c_header[HEADER_LEN];
 __constant__ uint8_t c_target[OUT_LEN];
