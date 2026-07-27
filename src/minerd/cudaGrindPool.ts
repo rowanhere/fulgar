@@ -47,7 +47,6 @@ interface ActiveGrind {
   continuous: boolean;
   gen: number;
   ranges: { start: number; end: number }[];
-  noncesPerLane: number;
 }
 
 export class CudaGrindPool {
@@ -63,7 +62,6 @@ export class CudaGrindPool {
   private permanentlyDownThisGen = 0;
   private expectedChildCount = 0;
   private activeGrind: ActiveGrind | null = null;
-  private noncesPerLane = resolveCudaNoncesPerLane();
   private terminating = false;
   private fastFailures: number[] = [];
   private fastFailureReported: boolean[] = [];
@@ -76,11 +74,6 @@ export class CudaGrindPool {
   setThrottle(throttle: number): void {
     this.throttle = Math.min(1, Math.max(0.05, throttle));
     if (this.activeGrind) this.activeGrind.throttle = this.throttle;
-  }
-
-  setNoncesPerLane(noncesPerLane: number): void {
-    this.noncesPerLane = Math.max(1, Math.floor(noncesPerLane));
-    if (this.activeGrind) this.activeGrind.noncesPerLane = this.noncesPerLane;
   }
 
   start(
@@ -118,7 +111,6 @@ export class CudaGrindPool {
       continuous,
       gen: this.gen,
       ranges,
-      noncesPerLane: this.noncesPerLane,
     };
     ranges.forEach((range, index) => this.spawnChild(index, this.gen, range.start, range.end));
     if (this.rateTimer) clearInterval(this.rateTimer);
@@ -162,10 +154,9 @@ export class CudaGrindPool {
     if (!state || this.terminating) return;
     let proc: GrindProc;
     try {
-      const noncesPerLane = this.activeGrind?.noncesPerLane ?? this.noncesPerLane;
       proc = spawn(
         CUDA_BIN,
-        ['grind', state.headerHex, state.targetHex, String(start), String(end), String(state.throttle), state.continuous ? '1' : '0', String(noncesPerLane)],
+        ['grind', state.headerHex, state.targetHex, String(start), String(end), String(state.throttle), state.continuous ? '1' : '0'],
         { stdio: ['pipe', 'pipe', 'pipe'] },
       );
     } catch (err) {
@@ -286,12 +277,4 @@ export class CudaGrindPool {
     for (const handle of this.pendingRespawns.values()) clearTimeout(handle);
     this.pendingRespawns.clear();
   }
-}
-
-function resolveCudaNoncesPerLane(): number {
-  const raw = (process.env.MINER_CUDA_NONCES_PER_LANE ?? '').trim();
-  if (raw === '') return 16;
-  const n = Number(raw);
-  if (!Number.isFinite(n)) return 16;
-  return Math.max(1, Math.floor(n));
 }
