@@ -22,7 +22,7 @@ static constexpr uint32_t SG_MASK = SG_W - 1;
 static constexpr int SG_PER = (1 << 21) / 4;
 static constexpr uint32_t GOLDEN = 0x9e3779b9u;
 static constexpr int DEFAULT_LANES = 1024;
-static constexpr int NONCES_PER_LANE = 1;
+static constexpr int DEFAULT_NONCES_PER_LANE = 64;
 
 __constant__ uint8_t c_header[HEADER_LEN];
 __constant__ uint8_t c_target[OUT_LEN];
@@ -145,14 +145,14 @@ __device__ static void sandglass_hash(const uint8_t header[HEADER_LEN], uint32_t
 
 __global__ void grind_kernel(uint64_t start, uint64_t end, int lanes, int nonces_per_lane, uint32_t* scratch, int* found_count, Hit* hits, uint64_t* hashes_done) {
   int lane = blockIdx.x * blockDim.x + threadIdx.x;
-  int total = gridDim.x * blockDim.x;
   if (lane >= lanes) return;
   uint8_t header[HEADER_LEN];
   for (int i = 0; i < HEADER_LEN; i++) header[i] = c_header[i];
   uint32_t* buf = scratch + ((size_t)lane * SG_W);
   uint64_t local = 0;
   uint64_t nonce = start + lane;
-  for (int n = 0; n < nonces_per_lane && nonce < end; n++, nonce += total) {
+  const uint64_t stride = (uint64_t)lanes;
+  for (int n = 0; n < nonces_per_lane && nonce < end; n++, nonce += stride) {
     write_u32be(header, NONCE_OFFSET, (uint32_t)nonce);
     uint8_t hash[OUT_LEN];
     sandglass_hash(header, buf, hash);
@@ -212,8 +212,8 @@ static void cuda_check(cudaError_t e, const char* what) {
 }
 
 static int grind(int argc, char** argv) {
-  if (argc != 7 && argc != 8 && argc != 9) {
-    fail("usage: brc-pow-cuda grind <header-hex> <target-hex> <start> <end> <throttle> [continuous] [lanes]", 2);
+  if (argc != 7 && argc != 8 && argc != 9 && argc != 10) {
+    fail("usage: brc-pow-cuda grind <header-hex> <target-hex> <start> <end> <throttle> [continuous] [lanes] [nonces_per_lane]", 2);
   }
   auto header = decode_hex(argv[2]);
   auto target = decode_hex(argv[3]);
@@ -227,6 +227,7 @@ static int grind(int argc, char** argv) {
   double throttle = std::stod(argv[6]);
   bool continuous = argc >= 8 && (std::string(argv[7]) == "1" || std::string(argv[7]) == "true");
   int lanes = argc >= 9 ? std::max(1, std::stoi(argv[8])) : DEFAULT_LANES;
+  int nonces_per_lane = argc >= 10 ? std::max(1, std::stoi(argv[9])) : DEFAULT_NONCES_PER_LANE;
   int threads = 128;
   int blocks = (lanes + threads - 1) / threads;
   size_t scratch_words = (size_t)lanes * SG_W;
@@ -249,10 +250,10 @@ static int grind(int argc, char** argv) {
   uint64_t cursor = start;
   while (cursor < end) {
     cuda_check(cudaMemset(d_found_count, 0, sizeof(int)), "clear found count");
-    uint64_t span = (uint64_t)lanes * NONCES_PER_LANE;
+    uint64_t span = (uint64_t)lanes * (uint64_t)nonces_per_lane;
     uint64_t chunk_end = std::min(end, cursor + span);
     auto t0 = std::chrono::steady_clock::now();
-    grind_kernel<<<blocks, threads>>>(cursor, chunk_end, lanes, NONCES_PER_LANE, d_scratch, d_found_count, d_hits, d_hashes);
+    grind_kernel<<<blocks, threads>>>(cursor, chunk_end, lanes, nonces_per_lane, d_scratch, d_found_count, d_hits, d_hashes);
     cuda_check(cudaGetLastError(), "launch");
     cuda_check(cudaDeviceSynchronize(), "sync");
     cuda_check(cudaMemcpy(&found_count, d_found_count, sizeof(int), cudaMemcpyDeviceToHost), "copy found count");
