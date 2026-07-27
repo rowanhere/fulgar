@@ -347,3 +347,23 @@ test('dispose() clears a pending solve (nothing submits after dispose)', async (
   await adv;
   assert.equal(calls.submits, 0);
 });
+
+test('a THROWING queued-solve submit still resets busy and rebuilds (no wedge)', async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  let submitCalls = 0;
+  const { coord, calls, solve } = makeCoord({
+    catchUp: () => gate, catchUpChanged: false,
+    submit: async () => { submitCalls++; if (submitCalls === 1) throw new Error('helpers down'); return { label: 'h=1' }; },
+  });
+  coord.rebuild();
+  const adv = coord.tipAdvanced({ height: 2, tipHash: 'aa' });
+  await flush();
+  solve(7); await flush();
+  release();
+  await adv; // drain submit throws → attempted=true → rebuild, busy reset
+  assert.ok(calls.logs.some((l) => l.includes('submit failed')));
+  assert.equal(calls.builds, 2, 'rebuilt after the failed drained submit');
+  solve(8); await flush(); // busy reset → the direct path still works
+  assert.equal(submitCalls, 2);
+});

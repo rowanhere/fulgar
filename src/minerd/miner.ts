@@ -300,22 +300,26 @@ export class MinerCoordinator {
     const pending = this.pendingSolve;
     this.pendingSolve = null;
     if (!pending || this.disposed) return false;
-    if (!allowSubmit) {
-      this.deps.onLog('solve discarded (catch-up failed — network state unknown)');
-      return false;
-    }
-    if (compareBytes(pending.template.header.prevHash, this.deps.tipHash()) !== 0) {
-      this.deps.onLog('solve superseded by network block — discarded');
-      return false;
-    }
+    // The WHOLE body is guarded, not just the submit: this runs inside the
+    // callers' finally blocks, where an escaped throw (even from a dep like
+    // tipHash) would skip the busy reset and wedge the miner forever.
     try {
+      if (!allowSubmit) {
+        this.deps.onLog('solve discarded (catch-up failed — network state unknown)');
+        return false;
+      }
+      if (compareBytes(pending.template.header.prevHash, this.deps.tipHash()) !== 0) {
+        this.deps.onLog('solve superseded by network block — discarded');
+        return false;
+      }
       this.deps.poolStop();
       const out = await this.deps.submit(pending.template, pending.nonce);
       this.deps.onLog(`solved:${out.label}`);
+      return true;
     } catch (e) {
       this.deps.onLog(`error:solo submit failed — ${(e as Error).message}`);
+      return true; // an ATTEMPT was made (or state is uncertain) — let the caller rebuild
     }
-    return true;
   }
 
   private async onExhausted(): Promise<void> {
