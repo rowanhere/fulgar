@@ -1,5 +1,4 @@
 // src/minerd/miner.ts
-import os from 'node:os';
 import { existsSync } from 'node:fs';
 import { Blockchain, type ReorgDelta } from '../chain/blockchain.js';
 import { hashHeader, type Block, type BlockHeader } from '../chain/block.js';

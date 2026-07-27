@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  buildNegotiatedTemplate, classifyCatchUpRound, classifyTemplateResult, decodeMempool,
+  backpressureDecision, buildNegotiatedTemplate, classifyCatchUpRound, classifyTemplateResult, decodeMempool,
   headerMatchesTemplate, isHexTarget, mempoolEntryAcceptable, negotiatedRequired, parseFrame,
   poolWsUrl, pruneOutstanding, settleOutstanding, shouldWarnStaleSource,
   negotiatedColdStart, type NegotiatedColdStartDeps,
@@ -432,4 +432,18 @@ test('negotiatedBackendNote: an actionable fallback reason wins the rendered lin
 test('negotiatedBackendNote: the mode banner otherwise (native running, or wasm chosen)', () => {
   assert.equal(negotiatedBackendNote({ useNative: true }), NEGOTIATED_BANNER);
   assert.equal(negotiatedBackendNote({ useNative: false }), NEGOTIATED_BANNER);
+});
+
+test('backpressureDecision: drops over the cap, warns once per episode, reports recovery', () => {
+  const s = { episode: false, dropped: 0 };
+  assert.deepEqual(backpressureDecision(s, 300_000, 262_144), { drop: true, warn: true, recoveredDropped: 0 });
+  assert.deepEqual(backpressureDecision(s, 400_000, 262_144), { drop: true, warn: false, recoveredDropped: 0 });
+  assert.deepEqual(backpressureDecision(s, 1_000, 262_144), { drop: false, warn: false, recoveredDropped: 2 });
+  assert.deepEqual(s, { episode: false, dropped: 0 }, 'recovery resets the state');
+  assert.deepEqual(backpressureDecision(s, 0, 262_144), { drop: false, warn: false, recoveredDropped: 0 });
+});
+
+test('backpressureDecision: exactly at the cap is not over it', () => {
+  const s = { episode: false, dropped: 0 };
+  assert.deepEqual(backpressureDecision(s, 262_144, 262_144), { drop: false, warn: false, recoveredDropped: 0 });
 });

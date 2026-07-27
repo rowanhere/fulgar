@@ -1,5 +1,4 @@
 // src/minerd/poolClient.ts
-import os from 'node:os';
 import { GrindPool } from './grindPool.js';
 import { NativeGrindPool } from './nativeGrindPool.js';
 import { hexToBytes } from '../util/binary.js';

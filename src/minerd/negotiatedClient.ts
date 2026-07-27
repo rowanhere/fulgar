@@ -68,6 +68,11 @@ const RETRY_BUILD_DELAY_MS = 5_000;
 const RETRY_REGISTER_BUSY_MS = 250;
 // The pool marks a miner's hashrate stale after ~15s without a report.
 const HASHRATE_REPORT_MS = 5_000;
+// A socket buffering more than this is not draining — time-sensitive messages
+// (shares, hashrate reports) are dropped rather than queued behind it; a share
+// that finally flushes minutes late is stale on arrival anyway. See
+// backpressureDecision.
+const WS_BUFFER_CAP_BYTES = 256 * 1024;
 // Leave room for the header + varint/count framing when packing transactions.
 const TX_BYTE_BUDGET = MAX_BLOCK_BYTES - 1_024;
 // Input bounds on the pool-announced mempool (see decodeMempool).
@@ -320,6 +325,32 @@ export type CatchUpRound = 'converged' | 'progressing' | 'stalled';
 export function classifyCatchUpRound(i: { changed: boolean; reachedTip: boolean }): CatchUpRound {
   if (i.reachedTip) return 'converged';
   return i.changed ? 'progressing' : 'stalled';
+}
+
+/** Should a time-sensitive message (share, hashrate report) be dropped instead
+ *  of buffered? A socket past the cap is not draining; queued shares arrive
+ *  stale and worthless while the buffer grows without bound. Control messages
+ *  (auth, template registration) are never dropped — if THOSE cannot drain the
+ *  session is dead and the watchdog/reconnect paths are the answer. Mutates
+ *  `state` (the caller owns it per-socket): entering the episode warns once,
+ *  leaving it reports how many messages were dropped. Exported for unit tests. */
+export interface BackpressureState { episode: boolean; dropped: number }
+export function backpressureDecision(
+  state: BackpressureState, bufferedAmount: number, cap: number,
+): { drop: boolean; warn: boolean; recoveredDropped: number } {
+  if (bufferedAmount > cap) {
+    const warn = !state.episode;
+    state.episode = true;
+    state.dropped++;
+    return { drop: true, warn, recoveredDropped: 0 };
+  }
+  if (state.episode) {
+    const n = state.dropped;
+    state.episode = false;
+    state.dropped = 0;
+    return { drop: false, warn: false, recoveredDropped: n };
+  }
+  return { drop: false, warn: false, recoveredDropped: 0 };
 }
 
 /** Should a stalled catch-up round be surfaced to the user? Only once per
@@ -735,12 +766,28 @@ export async function runNegotiatedPoolClient(
   let staleSourceEpisode = false;
   let windowHashes = 0;
 
-  const send = (msg: object): void => {
-    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+  // Per-socket backpressure bookkeeping; reset on reconnect (a fresh socket
+  // starts with an empty buffer, and a recovery line must not span sockets).
+  let backpressure: BackpressureState = { episode: false, dropped: 0 };
+
+  const send = (msg: object, opts: { droppable?: boolean } = {}): void => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (opts.droppable) {
+      const buffered = ws.bufferedAmount;
+      const d = backpressureDecision(backpressure, buffered, WS_BUFFER_CAP_BYTES);
+      if (d.warn) {
+        reporter.event('warn', `[nego-miner] pool connection is not draining (${Math.round(buffered / 1024)} KB buffered) — dropping shares/hashrate until it recovers`);
+      }
+      if (d.recoveredDropped > 0) {
+        reporter.event('info', `[nego-miner] pool connection recovered — ${d.recoveredDropped} time-sensitive message(s) dropped during the stall`);
+      }
+      if (d.drop) return;
+    }
+    ws.send(JSON.stringify(msg));
   };
 
   const hashrateTimer = setInterval(() => {
-    send({ type: 'hashrate', hashesPerSecond: windowHashes / (HASHRATE_REPORT_MS / 1000) });
+    send({ type: 'hashrate', hashesPerSecond: windowHashes / (HASHRATE_REPORT_MS / 1000) }, { droppable: true });
     windowHashes = 0;
   }, HASHRATE_REPORT_MS);
 
@@ -784,7 +831,7 @@ export async function runNegotiatedPoolClient(
         // share, and an unbounded set would grow at the hash rate. Past the cap
         // dedup degrades (the pool rejects a duplicate anyway) — memory does not.
         if (submittedNonces.size < MAX_SUBMITTED_NONCES) submittedNonces.add(nonce);
-        send({ type: 'share', jobId: grinding.templateId, nonce, hashHex: bytesToHex(hash) });
+        send({ type: 'share', jobId: grinding.templateId, nonce, hashHex: bytesToHex(hash) }, { droppable: true });
       },
       (hps) => {
         reporter.hashrate(hps);
@@ -1148,6 +1195,7 @@ export async function runNegotiatedPoolClient(
       grinding = null;
       outstanding = [];
       inFlight = 0;
+      backpressure = { episode: false, dropped: 0 };
       submittedNonces.clear();
       if (resultWatchdog) { clearTimeout(resultWatchdog); resultWatchdog = null; }
       if (registerTimer) { clearTimeout(registerTimer); registerTimer = null; }
