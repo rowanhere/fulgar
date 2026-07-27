@@ -152,7 +152,7 @@ mod imp {
     const MAP_HUGETLB: i32 = 0x4000;
     const PROT_READ: i32 = 0x1;
     const PROT_WRITE: i32 = 0x2;
-    const MAP_FAILED: *mut u8 = !0usize as *mut u8;
+    const MAP_FAILED: *mut core::ffi::c_void = !0usize as *mut core::ffi::c_void;
 
     #[link(name = "c")]
     unsafe extern "C" {
