@@ -329,6 +329,7 @@ test('the catch-up FAILURE path always discards a queued solve (lagging-helper t
   await adv;
   assert.equal(calls.submits, 0, 'no broadcast when the network state is unverifiable');
   assert.ok(calls.logs.some((l) => l.includes('discarded')));
+  assert.equal(calls.builds, 1, 'a drop does not restart the grind (anti-churn)');
   // No wedge: a later direct solve still processes.
   solve(8); await flush();
   assert.equal(calls.submits, 1);
@@ -366,4 +367,23 @@ test('a THROWING queued-solve submit still resets busy and rebuilds (no wedge)',
   assert.equal(calls.builds, 2, 'rebuilt after the failed drained submit');
   solve(8); await flush(); // busy reset → the direct path still works
   assert.equal(submitCalls, 2);
+});
+
+test('a THROWING tipHash dep cannot stick busy — pending dropped, grind untouched', async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  const { coord, calls, solve } = makeCoord({
+    catchUp: () => gate, catchUpChanged: false,
+    tipHash: () => { throw new Error('chain unavailable'); },
+  });
+  coord.rebuild();
+  const adv = coord.tipAdvanced({ height: 2, tipHash: 'aa' });
+  await flush();
+  solve(7); await flush();
+  release();
+  await adv; // tipHash throws inside the drain — must not escape the finally
+  assert.equal(calls.submits, 0);
+  assert.equal(calls.builds, 1, 'nothing consumed — no rebuild');
+  solve(8); await flush(); // busy reset → the direct path (no tipHash there) works
+  assert.equal(calls.submits, 1);
 });

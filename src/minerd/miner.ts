@@ -300,9 +300,12 @@ export class MinerCoordinator {
     const pending = this.pendingSolve;
     this.pendingSolve = null;
     if (!pending || this.disposed) return false;
-    // The WHOLE body is guarded, not just the submit: this runs inside the
-    // callers' finally blocks, where an escaped throw (even from a dep like
-    // tipHash) would skip the busy reset and wedge the miner forever.
+    // Guarded end to end: this runs inside the callers' finally blocks, where an
+    // escaped throw (a dep — even the logger) would skip the busy reset and
+    // wedge the miner forever. `attempted` flips only once grind state is
+    // consumed (poolStop) — a throw before that leaves the running grind intact
+    // and must not trigger the caller's rebuild.
+    let attempted = false;
     try {
       if (!allowSubmit) {
         this.deps.onLog('solve discarded (catch-up failed — network state unknown)');
@@ -312,14 +315,16 @@ export class MinerCoordinator {
         this.deps.onLog('solve superseded by network block — discarded');
         return false;
       }
+      attempted = true;
       this.deps.poolStop();
       const out = await this.deps.submit(pending.template, pending.nonce);
       this.deps.onLog(`solved:${out.label}`);
-      return true;
     } catch (e) {
-      this.deps.onLog(`error:solo submit failed — ${(e as Error).message}`);
-      return true; // an ATTEMPT was made (or state is uncertain) — let the caller rebuild
+      try {
+        this.deps.onLog(`error:solo submit failed — ${(e as Error).message}`);
+      } catch { /* logger unavailable — never escape into the callers' finally */ }
     }
+    return attempted;
   }
 
   private async onExhausted(): Promise<void> {
@@ -872,7 +877,11 @@ export async function runMiner(
       const err = /^error:(.*)$/s.exec(msg);
       if (err) {
         reporter.event('warn', `[minerd] ${err[1]}`);
+        return;
       }
+      // Anything else (the pending-solve queue/supersede/discard lines) surfaces
+      // as an info event — an unmatched coordinator message must never vanish.
+      reporter.event('info', `[minerd] ${msg}`);
     },
   });
 
