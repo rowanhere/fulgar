@@ -143,7 +143,78 @@ mod imp {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "linux")]
+mod imp {
+    use std::ptr;
+
+    const MAP_PRIVATE: i32 = 0x02;
+    const MAP_ANONYMOUS: i32 = 0x20;
+    const MAP_HUGETLB: i32 = 0x4000;
+    const PROT_READ: i32 = 0x1;
+    const PROT_WRITE: i32 = 0x2;
+    const MAP_FAILED: *mut u8 = !0usize as *mut u8;
+
+    #[link(name = "c")]
+    unsafe extern "C" {
+        fn mmap(addr: *mut core::ffi::c_void, length: usize, prot: i32, flags: i32, fd: i32, offset: i64) -> *mut core::ffi::c_void;
+        fn munmap(addr: *mut core::ffi::c_void, length: usize) -> i32;
+    }
+
+    fn try_huge_page(len_bytes: usize) -> Option<*mut u32> {
+        unsafe {
+            let p = mmap(
+                ptr::null_mut(),
+                len_bytes,
+                PROT_READ | PROT_WRITE,
+                MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB,
+                -1,
+                0,
+            );
+            if p == MAP_FAILED || p.is_null() {
+                None
+            } else {
+                // Zero the buffer (mmap with MAP_HUGETLB doesn't guarantee zeroed memory on all kernels).
+                ptr::write_bytes(p as *mut u8, 0, len_bytes);
+                Some(p as *mut u32)
+            }
+        }
+    }
+
+    pub struct HugeBuffer {
+        ptr: *mut u32,
+        len: usize,
+        is_huge: bool,
+        _fallback: Option<Vec<u32>>,
+    }
+
+    impl HugeBuffer {
+        pub fn new(len_words: usize) -> Self {
+            let bytes = len_words * 4;
+            if let Some(p) = try_huge_page(bytes) {
+                return HugeBuffer { ptr: p, len: len_words, is_huge: true, _fallback: None };
+            }
+            let mut v = vec![0u32; len_words];
+            let p = v.as_mut_ptr();
+            HugeBuffer { ptr: p, len: len_words, is_huge: false, _fallback: Some(v) }
+        }
+
+        pub fn as_mut_slice(&mut self) -> &mut [u32] {
+            unsafe { std::slice::from_raw_parts_mut(self.ptr, self.len) }
+        }
+    }
+
+    impl Drop for HugeBuffer {
+        fn drop(&mut self) {
+            if self.is_huge {
+                unsafe {
+                    munmap(self.ptr as *mut core::ffi::c_void, self.len * 4);
+                }
+            }
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 mod imp {
     pub struct HugeBuffer {
         v: Vec<u32>,
