@@ -829,9 +829,13 @@ export async function runNegotiatedPoolClient(
     grindStartedAt = now;
     grindProducing = false;
     if (action === 'respawn') {
-      reporter.event('warn', `[nego-miner] grind still stalled after ${grindStallStrikes} tries — requesting a fresh template (a box stuck at 0 H/s may be out of memory or CPU-starved; try lowering MINER_WORKERS)`);
+      reporter.event('warn', `[nego-miner] grind still stalled after ${grindStallStrikes} tries — restarting workers and requesting a fresh template (a box stuck at 0 H/s may be out of memory or CPU-starved; try lowering MINER_WORKERS)`);
       grindStallStrikes = 0;
-      grind.stop();
+      // respawn(), not stop(): stop only POSTS a message the workers must read —
+      // a thread hung inside the hash never consumes it, and the fresh template
+      // would be issued to the same dead workers. respawn REPLACES them (the
+      // classic heavy remedy does exactly this).
+      grind.respawn();
       grinding = null;
       scheduleRegister(0);
     } else {
