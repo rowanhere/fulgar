@@ -89,10 +89,10 @@ async function dryrun(): Promise<void> {
   // speed-up as the live miner. The pool owns its worker count, so the `cores`
   // arg from ChainSync is ignored while it's bound; we terminate it right after
   // bootstrap so no worker handles linger.
-  const pool = new VerifierPool(cfg.workers);
+  const pool = new VerifierPool(cfg.syncWorkers);
   const sync = new ChainSync({
     chain,
-    cores: cfg.workers,
+    cores: cfg.syncWorkers,
     getBlocks: (from, max) => getBlocks(cfg.helpers[0]!, from, max),
     verifyBlocksParallel: (blocks) => pool.verify(blocks),
     stateRetain: STATE_RETAIN,

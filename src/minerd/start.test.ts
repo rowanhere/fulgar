@@ -109,6 +109,7 @@ function fakeCfg(poolUrl: string | undefined): MinerConfig {
     minerPubkey: new Uint8Array(32),
     helpers: [],
     workers: 1,
+    syncWorkers: 1,
     tipPollMs: 3000,
     throttle: 0.75,
     smart: 'off',

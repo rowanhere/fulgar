@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { loadConfig, resolvePoolUrl } from './config.js';
+import { loadConfig, resolvePoolUrl, resolveSyncWorkers } from './config.js';
 
 test('MINER_SMART parses off|max|considerate, defaults off', () => {
   assert.equal(loadConfig({ MINER_PUBKEY: 'aa'.repeat(32) }).smart, 'off');
@@ -49,4 +49,24 @@ test('loadConfig: non-numeric MINER_TIP_POLL_MS falls back to the 3000ms default
 test('loadConfig: a blank MINER_TIP_POLL_MS (=\'\') is treated as unset, not Number(\'\')=0', () => {
   const cfg = loadConfig({ MINER_PUBKEY: '00'.repeat(32), MINER_TIP_POLL_MS: '' });
   assert.equal(cfg.tipPollMs, 3000);
+});
+
+test('resolveSyncWorkers: defaults to a modest verifier cap without reducing mining workers', () => {
+  assert.equal(resolveSyncWorkers(undefined, 64), 8);
+  assert.equal(resolveSyncWorkers('', 64), 8);
+  assert.equal(resolveSyncWorkers(undefined, 4), 4);
+  assert.equal(resolveSyncWorkers('junk', 64), 8);
+});
+
+test('resolveSyncWorkers: explicit value is floored and capped by mining workers', () => {
+  assert.equal(resolveSyncWorkers('2', 64), 2);
+  assert.equal(resolveSyncWorkers('2.9', 64), 2);
+  assert.equal(resolveSyncWorkers('0', 64), 1);
+  assert.equal(resolveSyncWorkers('999', 64), 64);
+});
+
+test('loadConfig: MINER_SYNC_WORKERS controls sync only; MINER_WORKERS still controls mining', () => {
+  const cfg = loadConfig({ MINER_PUBKEY: '00'.repeat(32), MINER_WORKERS: '4', MINER_SYNC_WORKERS: '3' });
+  assert.equal(cfg.workers, 4);
+  assert.equal(cfg.syncWorkers, 3);
 });

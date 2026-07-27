@@ -457,7 +457,7 @@ export async function runMiner(
   // verifyBlocksParallel otherwise (after bootstrap, or the whole warm path).
   const sync = new ChainSync({
     chain,
-    cores: cfg.workers,
+    cores: cfg.syncWorkers,
     getBlocks: (from, max, preferBase) => helperPool.getBlocks(from, max, undefined, preferBase),
     verifyBlocksParallel: (blocks, cores) =>
       verifierPool && !verifierTerminated ? verifierPool.verify(blocks) : verifyBlocksParallel(blocks, cores),
@@ -476,7 +476,7 @@ export async function runMiner(
     // genesis and returns restored:false, so we fall back to a full sync.
     const restore = restoreSnapshot(chain, debug);
     let warmStart = restore.restored;
-    verifierPool = new VerifierPool(cfg.workers);
+    verifierPool = new VerifierPool(cfg.syncWorkers);
     signal?.addEventListener('abort', terminateVerifier, { once: true });
 
     // a restored snapshot is attacker-writable local state — confirm it

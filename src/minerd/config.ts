@@ -8,10 +8,28 @@ export interface MinerConfig {
   minerPubkey: Uint8Array;
   helpers: string[];
   workers: number;
+  syncWorkers: number;
   tipPollMs: number;
   throttle: number; // duty cycle in (0.05, 1]: fraction of wall-time spent hashing
   smart: 'off' | 'max' | 'considerate';
   poolUrl?: string; // set via MINER_POOL; enables pool-client mode
+}
+
+export const DEFAULT_SYNC_WORKER_CAP = 8;
+
+/**
+ * Chain sync verifies already-mined blocks. It benefits from parallelism, but it
+ * also boots one V8 worker heap per verifier; on large VPS/container hosts that
+ * can exhaust a constrained Node heap before mining even starts. Keep bootstrap
+ * modest by default, while letting operators raise/lower it explicitly.
+ */
+export function resolveSyncWorkers(raw: string | undefined, miningWorkers: number): number {
+  const max = Math.max(1, Math.floor(miningWorkers) || 1);
+  const v = (raw ?? '').trim();
+  if (v === '') return Math.min(DEFAULT_SYNC_WORKER_CAP, max);
+  const n = Number(v);
+  if (!Number.isFinite(n)) return Math.min(DEFAULT_SYNC_WORKER_CAP, max);
+  return Math.min(max, Math.max(1, Math.floor(n)));
 }
 
 // The official BrowserCoin API helper set. Reads try them in rotation and take the
@@ -101,6 +119,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   // MINER_WORKERS is still honored as written (bounded only by the host). See
   // cpuBudget.ts.
   const workers = resolveWorkers(env.MINER_WORKERS, cpuBudget());
+  const syncWorkers = resolveSyncWorkers(env.MINER_SYNC_WORKERS, workers);
 
   // A blank value ('') must count as unset (-> 3000), matching the old truthiness
   // check: Number('') === 0, so a blank MINER_TIP_POLL_MS used to silently floor
@@ -120,5 +139,5 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
 
   const poolUrl = resolvePoolUrl(env.MINER_POOL);
 
-  return { minerPubkeyHex, minerPubkey, helpers, workers, tipPollMs, throttle, smart, poolUrl };
+  return { minerPubkeyHex, minerPubkey, helpers, workers, syncWorkers, tipPollMs, throttle, smart, poolUrl };
 }
