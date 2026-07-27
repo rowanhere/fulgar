@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { SmartController, smartStartDuty } from './smartController.js';
+import { SmartController, applyPriorityPolicy, smartStartDuty } from './smartController.js';
 
 // synthetic machine: H/s rises with throttle up to a knee, then flattens/dips (throttle).
 function machine(knee = 0.7) {
@@ -221,4 +221,25 @@ test('Smart Max starts full-tilt and holds (no slow ramp from a low manual throt
   for (let i = 0; i < 50; i++) { for (let s = 0; s < 5; s++) { sc.onHashrate(700); now += 200; } sc.tick(); }
   assert.equal(applied, 1, 'holds at 100%');
   assert.equal(sc.phase(), 'holding');
+});
+
+test('applyPriorityPolicy: considerate nices, others do not', () => {
+  const calls: number[] = [];
+  assert.deepEqual(applyPriorityPolicy('considerate', { set: (p) => { calls.push(p); }, get: () => 0 }), { niced: true });
+  assert.deepEqual(calls, [10]);
+  assert.deepEqual(applyPriorityPolicy('max', { set: (p) => { calls.push(p); }, get: () => 0 }), { niced: false });
+  assert.deepEqual(applyPriorityPolicy('off', { set: (p) => { calls.push(p); }, get: () => 0 }), { niced: false });
+  assert.deepEqual(calls, [10], 'non-considerate modes never touch priority');
+});
+
+test('applyPriorityPolicy: a leftover nice in a non-considerate session yields the restart note', () => {
+  const r = applyPriorityPolicy('max', { set: () => {}, get: () => 10 });
+  assert.equal(r.niced, false);
+  assert.match(r.note!, /restart/i);
+  // Considerate itself never notes — it WANTS the nice.
+  assert.equal(applyPriorityPolicy('considerate', { set: () => {}, get: () => 10 }).note, undefined);
+  // A throwing set (unsupported platform) is silent, not fatal.
+  assert.deepEqual(applyPriorityPolicy('considerate', { set: () => { throw new Error('EPERM'); }, get: () => 0 }), { niced: false });
+  // A throwing get likewise.
+  assert.deepEqual(applyPriorityPolicy('max', { set: () => {}, get: () => { throw new Error('EPERM'); } }), { niced: false });
 });

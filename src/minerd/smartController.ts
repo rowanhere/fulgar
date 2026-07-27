@@ -1,3 +1,4 @@
+import os from 'node:os';
 import type { CpuReading, DemandSignal } from './demand.js';
 
 export interface ThrottleSink { setThrottle(t: number): void }
@@ -79,6 +80,31 @@ export function smartStartDuty(smart: 'off' | 'max' | 'considerate', manualThrot
   if (smart === 'max') return 1;
   if (smart === 'considerate') return CONSIDERATE_START;
   return manualThrottle;
+}
+
+/** Considerate is the only mode allowed to lower the process priority (nice 10):
+ *  Manual/Max users asked for speed, and a nice is STICKY — an unprivileged
+ *  process can never raise its priority back, so a Considerate session's nice
+ *  survives a mode switch until the process restarts. For non-Considerate modes
+ *  this detects a leftover nice and returns a one-line note so the session can
+ *  say why it is slower and how to fix it. All three mining paths (solo,
+ *  classic pool, negotiated) call this — one policy, one place. os hooks
+ *  injectable for tests. */
+export function applyPriorityPolicy(
+  smart: 'off' | 'max' | 'considerate',
+  hooks: { set?: (prio: number) => void; get?: () => number } = {},
+): { niced: boolean; note?: string } {
+  const set = hooks.set ?? ((p: number): void => { os.setPriority(p); });
+  const get = hooks.get ?? ((): number => os.getPriority());
+  if (smart === 'considerate') {
+    try { set(10); return { niced: true }; } catch { return { niced: false }; }
+  }
+  try {
+    if (get() > 0) {
+      return { niced: false, note: 'process priority is still lowered from an earlier Considerate session — restart the miner to restore full priority' };
+    }
+  } catch { /* unreadable priority — nothing to report */ }
+  return { niced: false };
 }
 
 export class SmartController {

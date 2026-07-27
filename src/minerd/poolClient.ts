@@ -14,7 +14,7 @@ import { isFulgurPool } from './pools.js';
 import { perfHints, nodeMajorOf } from './perfAdvice.js';
 import { cpuBudget } from './cpuBudget.js';
 import { NONCE_SPACE } from './partition.js';
-import { SmartController, smartStartDuty } from './smartController.js';
+import { SmartController, applyPriorityPolicy, smartStartDuty } from './smartController.js';
 import { createDemandSignal } from './demand.js';
 import { resolvePoolEngine } from './poolEngine.js';
 
@@ -648,12 +648,12 @@ export async function runPoolClient(
   let acceptedShares = 0;
 
   // Considerate's whole job is to get out of your way, so it also grinds at a lower
-  // scheduling priority (solo has always done this). Manual and Max are NOT niced: a
-  // user who asked for a fixed rate or for full tilt did not ask to lose scheduler
-  // races, and quietly costing them hashrate would be a regression.
-  if (smart === 'considerate') {
-    try { os.setPriority(10); } catch { /* not permitted on some platforms — ignore */ }
-  }
+  // scheduling priority; Manual and Max are NOT niced — a user who asked for full
+  // tilt did not ask to lose scheduler races. applyPriorityPolicy is the one policy
+  // for all three paths, plus the note when a sticky nice lingers from an earlier
+  // Considerate session.
+  const prio = applyPriorityPolicy(smart);
+  if (prio.note) reporter.event('info', `[pool-miner] ${prio.note}`);
 
   const pool: GrindPool | NativeGrindPool = createPool(useNative, workers, startDuty);
   const smartController = smart !== 'off'

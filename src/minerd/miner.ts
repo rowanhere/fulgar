@@ -18,7 +18,7 @@ import { nativePowIsCurrent } from './nativeParity.js';
 import { submitSoloBlock } from './submitSolo.js';
 import { ConsoleReporter, type MinerReporter, type ReporterStatus } from './reporter.js';
 import { restoreSnapshot, saveSnapshot, deleteSnapshot } from './persistence.js';
-import { SmartController, smartStartDuty } from './smartController.js';
+import { SmartController, applyPriorityPolicy, smartStartDuty } from './smartController.js';
 import { createDemandSignal } from './demand.js';
 import { perfHints, nodeMajorOf } from './perfAdvice.js';
 import { cpuBudget } from './cpuBudget.js';
@@ -653,8 +653,11 @@ export async function runMiner(
     reporter.event('warn', `[minerd] ${backendNote}`);
   }
 
-  // Run below normal priority so foreground apps always win the CPU (safeguard).
-  try { os.setPriority(10); } catch { /* not permitted on some platforms — ignore */ }
+  // Priority policy: Considerate-only (applyPriorityPolicy — one policy for all
+  // three paths). Solo used to nice UNCONDITIONALLY as a "safeguard", quietly
+  // costing Max/Manual miners scheduler races the pool paths never paid.
+  const prio = applyPriorityPolicy(cfg.smart);
+  if (prio.note) reporter.event('info', `[minerd] ${prio.note}`);
   // Smart modes set their OWN starting duty cycle from the mode (Max=100%,
   // Considerate=50%); only Manual uses cfg.throttle. Seeding from cfg.throttle made
   // Smart Max start at a lowered manual throttle and ramp up slowly instead of

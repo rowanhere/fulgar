@@ -47,7 +47,7 @@ import {
 import { deleteSnapshot, restoreSnapshot, saveSnapshot, type RestoreOutcome } from './persistence.js';
 import { isFulgurPool } from './pools.js';
 import { ConsoleReporter, type MinerReporter, type ReporterStatus } from './reporter.js';
-import { SmartController, smartStartDuty } from './smartController.js';
+import { SmartController, applyPriorityPolicy, smartStartDuty } from './smartController.js';
 import { createDemandSignal } from './demand.js';
 import { startPoolStats } from './poolStats.js';
 import { ChainSync, STATE_RETAIN } from './sync.js';
@@ -485,6 +485,10 @@ export async function runNegotiatedPoolClient(
   }
 
   const startDuty = smartStartDuty(smart, throttle);
+  // Priority parity with the other two paths (negotiated never niced at all —
+  // Considerate here ran at full scheduling priority, contradicting its contract).
+  const prio = applyPriorityPolicy(smart);
+  if (prio.note) reporter.event('info', `[nego-miner] ${prio.note}`);
   // Same engine gate as the classic pool path (poolEngine.ts): honor a native
   // selection, demote to wasm with a persistent visible reason otherwise.
   const engine = resolvePoolEngine();
