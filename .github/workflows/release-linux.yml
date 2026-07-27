@@ -1,0 +1,35 @@
+name: release-linux
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux-binary:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build native binary
+        working-directory: native/brc-pow
+        run: cargo build --locked --release
+
+      - name: Package binary
+        run: |
+          mkdir -p dist
+          cp native/brc-pow/target/release/brc-pow dist/brc-pow-linux-x86_64
+          tar -C dist -czf fulgurminer-linux-x86_64.tar.gz brc-pow-linux-x86_64
+
+      - name: Upload release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: fulgurminer-linux-x86_64.tar.gz
