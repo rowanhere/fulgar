@@ -12,6 +12,7 @@ import { VerifierPool, verifyBlocksParallel } from './verify.js';
 import { ChainSync, STATE_RETAIN } from './sync.js';
 import { buildTemplate, type Template } from './template.js';
 import { GrindPool } from './grindPool.js';
+import { CUDA_BIN, CudaGrindPool } from './cudaGrindPool.js';
 import { NATIVE_BIN, NativeGrindPool } from './nativeGrindPool.js';
 import { nativePowIsCurrent } from './nativeParity.js';
 import { submitSoloBlock } from './submitSolo.js';
@@ -708,10 +709,15 @@ export async function runMiner(
   // this is the only algo gate here.) Resolve this BEFORE lowering priority below:
   // nativePowIsCurrent() spawns a child that would inherit the lowered priority and
   // could then time out on a loaded box, falsely demoting a good native binary.
-  const nativeSelected = !!process.env.MINER_NATIVE;
+  const cudaSelected = !!process.env.MINER_CUDA;
+  const useCuda = cudaSelected && existsSync(CUDA_BIN);
+  const nativeSelected = !useCuda && !!process.env.MINER_NATIVE;
   const useNative = nativeSelected && existsSync(NATIVE_BIN) && nativePowIsCurrent();
   let backendNote: string | undefined;
-  if (nativeSelected && !useNative) {
+  if (cudaSelected && !useCuda) {
+    backendNote = 'cuda engine not built - build: cd native/brc-pow-cuda && make; using cpu';
+    reporter.event('warn', `[minerd] ${backendNote}`);
+  } else if (nativeSelected && !useNative) {
     backendNote = existsSync(NATIVE_BIN)
       ? 'native engine outdated — rebuild: cd native/brc-pow && cargo build --release; using wasm'
       : 'native engine not built — install Rust (https://rustup.rs) and build it; using wasm';
@@ -728,9 +734,11 @@ export async function runMiner(
   // Smart Max start at a lowered manual throttle and ramp up slowly instead of
   // going straight to full — see smartStartDuty().
   const startDuty = smartStartDuty(cfg.smart, cfg.throttle);
-  const pool: GrindPoolLike = useNative
-    ? new NativeGrindPool(cfg.workers, startDuty)
-    : new GrindPool(cfg.workers, startDuty);
+  const pool: GrindPoolLike = useCuda
+    ? new CudaGrindPool(cfg.workers, startDuty)
+    : useNative
+      ? new NativeGrindPool(cfg.workers, startDuty)
+      : new GrindPool(cfg.workers, startDuty);
   const smartController = cfg.smart !== 'off'
     ? new SmartController(
       pool,
@@ -752,7 +760,7 @@ export async function runMiner(
   const status: ReporterStatus = {
     mode: 'solo',
     target: 'solo',
-    backend: useNative ? 'native' : 'wasm',
+    backend: useCuda ? 'cuda' : useNative ? 'native' : 'wasm',
     backendNote,
     workers: cfg.workers,
     // The effective starting duty cycle: mode-derived in Smart, the manual value in
