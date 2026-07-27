@@ -51,6 +51,7 @@ import { SmartController, applyPriorityPolicy, smartStartDuty } from './smartCon
 import { createDemandSignal } from './demand.js';
 import { startPoolStats } from './poolStats.js';
 import { ChainSync, STATE_RETAIN } from './sync.js';
+import { WATCHDOG_INTERVAL_MS, watchdogDecision } from './watchdog.js';
 import { checkForUpdate } from './updateCheck.js';
 import { VerifierPool, verifyBlocksParallel } from './verify.js';
 
@@ -769,6 +770,15 @@ export async function runNegotiatedPoolClient(
   // staleness is not a property of the WS generation.
   let staleSourceEpisode = false;
   let windowHashes = 0;
+  // Grind-stall watchdog state (classic's driver model — see watchdog.ts).
+  // NOTE: `watchdogStrikes` above is the REGISTRATION-result backoff; these are
+  // the grind-stall counters. Episode = the grinding null → non-null transition
+  // at template acceptance ONLY; a vardiff/startGrind re-issue must not reset
+  // these (job churn masking a stall).
+  let grindStartedAt = Date.now();
+  let grindProducing = false;
+  let grindStallStrikes = 0;
+  let lastNonzeroTickAt = Date.now();
 
   // Per-socket backpressure bookkeeping; reset on reconnect (a fresh socket
   // starts with an empty buffer, and a recovery line must not span sockets).
@@ -794,6 +804,41 @@ export async function runNegotiatedPoolClient(
     send({ type: 'hashrate', hashesPerSecond: windowHashes / (HASHRATE_REPORT_MS / 1000) }, { droppable: true });
     windowHashes = 0;
   }, HASHRATE_REPORT_MS);
+
+  // Grind-stall watchdog (the classic escalating model — dormant while there is
+  // no accepted template, so it can never fight the registration single-flight
+  // or a catch-up). re-apply = re-issue the accepted template to the workers
+  // (for native, start() already stops + respawns children, which un-hangs a
+  // dead one); respawn = drop the template and re-register — the fresh
+  // acceptance path resets nonce dedup and restarts the grind cleanly, and
+  // REGISTER_MIN_INTERVAL_MS rate-limits any loop.
+  const grindWatchdogTimer = setInterval(() => {
+    const now = Date.now();
+    const action = watchdogDecision({
+      stopped,
+      hasActiveJob: grinding !== null,
+      producing: grindProducing,
+      msSinceTick: now - lastNonzeroTickAt,
+      msSinceGrindStart: now - grindStartedAt,
+      strikes: grindStallStrikes,
+    });
+    if (action === 'ok') return;
+    grindStallStrikes++;
+    // Give the re-issued grind its boot grace before the next strike, exactly
+    // like classic's refresh does after a remedy.
+    grindStartedAt = now;
+    grindProducing = false;
+    if (action === 'respawn') {
+      reporter.event('warn', `[nego-miner] grind still stalled after ${grindStallStrikes} tries — requesting a fresh template (a box stuck at 0 H/s may be out of memory or CPU-starved; try lowering MINER_WORKERS)`);
+      grindStallStrikes = 0;
+      grind.stop();
+      grinding = null;
+      scheduleRegister(0);
+    } else {
+      reporter.event('warn', `[nego-miner] grind stalled — re-applying work (attempt ${grindStallStrikes})`);
+      startGrind();
+    }
+  }, WATCHDOG_INTERVAL_MS);
 
   const scheduleRegister = (delayMs: number): void => {
     if (stopped) return;
@@ -838,6 +883,11 @@ export async function runNegotiatedPoolClient(
         send({ type: 'share', jobId: grinding.templateId, nonce, hashHex: bytesToHex(hash) }, { droppable: true });
       },
       (hps) => {
+        if (hps > 0) {
+          lastNonzeroTickAt = Date.now();
+          grindProducing = true;
+          grindStallStrikes = 0;
+        }
         reporter.hashrate(hps);
         windowHashes += hps;
         smartController?.onHashrate(hps);
@@ -1104,6 +1154,13 @@ export async function runNegotiatedPoolClient(
         watchdogStrikes = 0;
         outstanding = settled.rest;
         submittedNonces.clear();
+        // Grind-stall episode start only when coming from idle: a template
+        // replacing a RUNNING grind reuses producing workers and must not reset
+        // the boot-grace clock (job churn would mask a real stall).
+        if (grinding === null) {
+          grindStartedAt = Date.now();
+          grindProducing = false;
+        }
         grinding = {
           templateId: String(msg.templateId),
           headerBytes: hexToBytes(String(msg.headerHex)),
@@ -1221,6 +1278,7 @@ export async function runNegotiatedPoolClient(
 
   stopped = true;
   clearInterval(hashrateTimer);
+  clearInterval(grindWatchdogTimer);
   if (registerTimer) clearTimeout(registerTimer);
   if (resultWatchdog) clearTimeout(resultWatchdog);
   if (reconnectTimer) clearTimeout(reconnectTimer);
