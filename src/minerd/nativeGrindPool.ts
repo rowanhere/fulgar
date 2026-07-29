@@ -46,7 +46,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
  *  Without this, existsSync(NATIVE_BIN) never matches on Windows → the engine reports
  *  "build failed" after a successful cargo build and re-prompts every launch. */
 const EXE = process.platform === 'win32' ? '.exe' : '';
-/** Path to the host-optimized release binary built in native/brc-pow. */
+/** Path to the release binary built by `cargo build --release` in native/brc-pow. */
 export const NATIVE_BIN = resolve(__dirname, `../../native/brc-pow/target/release/brc-pow${EXE}`);
 
 export type OnSolved = (nonce: number, hash: Uint8Array) => void;
@@ -255,12 +255,7 @@ export class NativeGrindPool {
       proc = spawn(
         NATIVE_BIN,
         ['grind', headerHex, targetHex, String(start), String(end), String(throttle), String(continuous ? 1 : 0)],
-        {
-          stdio: ['pipe', 'pipe', 'pipe'],
-          env: process.platform === 'linux'
-            ? { ...process.env, BRC_WORKER_INDEX: String(index) }
-            : process.env,
-        },
+        { stdio: ['pipe', 'pipe', 'pipe'] },
       );
     } catch (err) {
       this.onError(err as Error);
