@@ -12,7 +12,7 @@
 //       before the current PoW fork — it still exists but grinds the old algo and
 //       would mine invalid blocks; existsSync can't tell, so nativePowIsCurrent()
 //       grinds one nonce at the exact fork height and checks the digest)
-//       cargo on PATH  → offer to (re)build (cargo build --release in native/brc-pow)
+//       cargo on PATH  → offer to (re)build for the host CPU in native/brc-pow
 //                        with a status line; rebuilt+verified → native, else wasm.
 //       cargo missing  → print the exact build command, fall back to wasm.
 //
@@ -32,7 +32,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 /** Directory of the native Rust crate (where cargo build runs). */
 export const NATIVE_DIR = resolve(__dirname, '../../native/brc-pow');
 /** The exact command a user runs to build the native engine by hand. */
-export const BUILD_CMD = 'cd native/brc-pow && cargo build --release';
+export const BUILD_CMD = 'cd native/brc-pow && cargo rustc --release --locked -- -C target-cpu=native';
 
 /**
  * True when the native engine can actually run on this machine: either a binary
@@ -55,7 +55,9 @@ export function hasCargo(): boolean {
   }
 }
 
-/** Run `cargo build --release` in the native crate. Returns true on success. */
+/** Build for the exact host CPU so LLVM can use its native instruction set and
+ * scheduling model. The binary is local to this machine, so portability is not
+ * useful here and leaves measurable hashrate behind on recent x86 servers. */
 export function buildNative(): boolean {
   try {
     // Verify the crate dir is where we computed it BEFORE spawning cargo: if the
@@ -63,7 +65,11 @@ export function buildNative(): boolean {
     // Rust crate, a cargo spawn there fails with a confusing error. Bail with a
     // clear false instead (the caller falls back to wasm and prints BUILD_CMD).
     if (!existsSync(resolve(NATIVE_DIR, 'Cargo.toml'))) return false;
-    const r = spawnSync('cargo', ['build', '--release'], { cwd: NATIVE_DIR, stdio: 'inherit' });
+    const r = spawnSync(
+      'cargo',
+      ['rustc', '--release', '--locked', '--', '-C', 'target-cpu=native'],
+      { cwd: NATIVE_DIR, stdio: 'inherit' },
+    );
     return r.status === 0 && existsSync(NATIVE_BIN);
   } catch {
     return false;
@@ -132,7 +138,7 @@ export async function resolveEngine(
       build = false;
     }
     if (build) {
-      log('  Building the native engine (cargo build --release)…');
+      log('  Building the native engine for this CPU…');
       // Re-verify after building: a fresh build from this source should grind the
       // current PoW, but if the build silently produced a wrong engine we must NOT
       // return it — fall back to wasm instead of mining invalid work.

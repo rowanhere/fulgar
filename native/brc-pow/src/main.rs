@@ -30,6 +30,7 @@
 //!        `HASHRATE <n>` to stderr roughly once per second. Single-threaded per
 //!        process — Node spawns one process per nonce range.
 
+mod affinity;
 mod hugepage;
 
 use argon2::{Algorithm, Argon2, Block, Params, Version};
@@ -437,6 +438,8 @@ fn main() {
                     v == "1" || v.eq_ignore_ascii_case("true")
                 })
                 .unwrap_or(false);
+
+            affinity::pin_worker_from_env();
 
             match grind(header, target, start, end, throttle, continuous) {
                 Ok(code) => exit(code),

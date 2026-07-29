@@ -308,7 +308,7 @@ whichever mode you pick.
 By default FulgurMiner uses a portable engine that runs anywhere Node runs — zero setup. The **native** (Rust) engine was ~1.9× faster on the old Argon2id PoW. On **Sandglass v3** (the new PoW from block 33,550) how much it buys you depends on your CPU: on **Apple silicon** the two are within ~5% (see [Performance](#performance)), but on **x86** native is meaningfully faster once you use most of your cores — measured **+20% at 8 workers and +10% at 16** on a 16-core AMD EPYC (Zen 4), because it uses a memory prefetch that only exists on x86. At 1-2 workers it is slightly slower either way. Switch via the **Engine** setting (or `MINER_NATIVE=1`). On the next start FulgurMiner:
 
 - uses the built engine if it's already there;
-- offers to **build it now** (a one-time `cargo build --release`, ~a minute) if you have the [Rust toolchain](https://rustup.rs);
+- offers to **build it now** (a one-time host-optimized Rust build, ~a minute) if you have the [Rust toolchain](https://rustup.rs);
 - otherwise prints the build command and keeps mining with wasm — nothing blocks.
 
 **Getting Rust (one-time).** Install it from **[rustup.rs](https://rustup.rs)**, then **open a new terminal** so `cargo` is on your PATH before building. The build also needs a C toolchain:
@@ -318,7 +318,7 @@ By default FulgurMiner uses a portable engine that runs anywhere Node runs — z
 - **Linux** — install a build toolchain, e.g. `build-essential` (Debian/Ubuntu).
 
 ```bash
-cd native/brc-pow && cargo build --release && cd ../..
+cd native/brc-pow && cargo rustc --release --locked -- -C target-cpu=native && cd ../..
 MINER_NATIVE=1 npm start
 ```
 

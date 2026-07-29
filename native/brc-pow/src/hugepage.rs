@@ -160,11 +160,26 @@ mod imp {
         fn munmap(addr: *mut core::ffi::c_void, length: usize) -> i32;
     }
 
-    fn try_huge_page(len_bytes: usize) -> Option<*mut u32> {
+    fn huge_page_size() -> usize {
+        std::fs::read_to_string("/proc/meminfo")
+            .ok()
+            .and_then(|info| {
+                info.lines().find_map(|line| {
+                    let kib = line.strip_prefix("Hugepagesize:")?
+                        .split_whitespace().next()?.parse::<usize>().ok()?;
+                    Some(kib * 1024)
+                })
+            })
+            .unwrap_or(2 * 1024 * 1024)
+    }
+
+    fn try_huge_page(len_bytes: usize) -> Option<(*mut u32, usize)> {
+        let page_size = huge_page_size();
+        let map_len = len_bytes.div_ceil(page_size) * page_size;
         unsafe {
             let p = mmap(
                 ptr::null_mut(),
-                len_bytes,
+                map_len,
                 PROT_READ | PROT_WRITE,
                 MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB,
                 -1,
@@ -175,7 +190,7 @@ mod imp {
             } else {
                 // Zero the buffer (mmap with MAP_HUGETLB doesn't guarantee zeroed memory on all kernels).
                 ptr::write_bytes(p as *mut u8, 0, len_bytes);
-                Some(p as *mut u32)
+                Some((p as *mut u32, map_len))
             }
         }
     }
@@ -183,6 +198,7 @@ mod imp {
     pub struct HugeBuffer {
         ptr: *mut u32,
         len: usize,
+        map_len: usize,
         is_huge: bool,
         _fallback: Option<Vec<u32>>,
     }
@@ -190,12 +206,12 @@ mod imp {
     impl HugeBuffer {
         pub fn new(len_words: usize) -> Self {
             let bytes = len_words * 4;
-            if let Some(p) = try_huge_page(bytes) {
-                return HugeBuffer { ptr: p, len: len_words, is_huge: true, _fallback: None };
+            if let Some((p, map_len)) = try_huge_page(bytes) {
+                return HugeBuffer { ptr: p, len: len_words, map_len, is_huge: true, _fallback: None };
             }
             let mut v = vec![0u32; len_words];
             let p = v.as_mut_ptr();
-            HugeBuffer { ptr: p, len: len_words, is_huge: false, _fallback: Some(v) }
+            HugeBuffer { ptr: p, len: len_words, map_len: 0, is_huge: false, _fallback: Some(v) }
         }
 
         pub fn as_mut_slice(&mut self) -> &mut [u32] {
@@ -207,7 +223,7 @@ mod imp {
         fn drop(&mut self) {
             if self.is_huge {
                 unsafe {
-                    munmap(self.ptr as *mut core::ffi::c_void, self.len * 4);
+                    munmap(self.ptr as *mut core::ffi::c_void, self.map_len);
                 }
             }
         }
