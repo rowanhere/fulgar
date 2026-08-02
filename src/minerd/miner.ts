@@ -12,7 +12,7 @@ import { VerifierPool, verifyBlocksParallel } from './verify.js';
 import { ChainSync, STATE_RETAIN } from './sync.js';
 import { buildTemplate, type Template } from './template.js';
 import { GrindPool } from './grindPool.js';
-import { CUDA_BIN, CudaGrindPool } from './cudaGrindPool.js';
+import { CUDA_BIN, CudaGrindPool, resolveCudaWorkers } from './cudaGrindPool.js';
 import { NATIVE_BIN, NativeGrindPool } from './nativeGrindPool.js';
 import { nativePowIsCurrent } from './nativeParity.js';
 import { submitSoloBlock } from './submitSolo.js';
@@ -735,7 +735,7 @@ export async function runMiner(
   // going straight to full — see smartStartDuty().
   const startDuty = smartStartDuty(cfg.smart, cfg.throttle);
   const pool: GrindPoolLike = useCuda
-    ? new CudaGrindPool(cfg.workers, startDuty)
+    ? new CudaGrindPool(resolveCudaWorkers(), startDuty)
     : useNative
       ? new NativeGrindPool(cfg.workers, startDuty)
       : new GrindPool(cfg.workers, startDuty);

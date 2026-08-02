@@ -23,6 +23,13 @@ import { isValidNativeHit } from './nativeGrindPool.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 export const CUDA_BIN = resolve(__dirname, '../../native/brc-pow-cuda/target/release/brc-pow-cuda');
 
+/** CUDA workers are GPU processes, not CPU-core workers. One process is the
+ * safe default because each process owns a large Sandglass scratch allocation. */
+export function resolveCudaWorkers(raw = process.env.MINER_CUDA_WORKERS): number {
+  const n = Number((raw ?? '').trim());
+  return Number.isFinite(n) ? Math.max(1, Math.floor(n)) : 1;
+}
+
 type GrindProc = ChildProcessByStdio<Writable, Readable, Readable>;
 
 interface Child {

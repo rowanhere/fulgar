@@ -324,6 +324,17 @@ MINER_NATIVE=1 npm start
 
 The status bar shows `native` vs `wasm` so you can confirm which is active. If native was selected but isn't built yet, the dashboard says so and keeps mining with wasm.
 
+## CUDA engine
+
+The optional CUDA engine mines the current Sandglass-era proof of work on an NVIDIA GPU. It is selected explicitly with `MINER_CUDA=1`; CPU mining remains available with `MINER_NATIVE=1`. Build it on Linux with the CUDA toolkit installed:
+
+```bash
+cd native/brc-pow-cuda && make && cd ../..
+MINER_POOL=solo MINER_CUDA=1 MINER_CUDA_WORKERS=1 npm start
+```
+
+`MINER_CUDA_WORKERS` defaults to `1` because each CUDA process owns a large per-lane scratch buffer. Use more only when running multiple GPUs and after checking available VRAM. The CUDA path is Sandglass-only, matching the current network height; pre-fork Argon2id work continues to use the CPU engine.
+
 ## Troubleshooting
 
 - **The first sync takes a moment.** A fresh solo start downloads and verifies BrowserCoin's chain so you build on the right one. The `Verifying blockchain` bar (TUI) / `verifying … (P%)` lines (plain) show progress — it's working, not stuck. (Pool mining skips this; the pool serves the work.)
