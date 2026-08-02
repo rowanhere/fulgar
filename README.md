@@ -335,6 +335,8 @@ MINER_POOL=solo MINER_CUDA=1 MINER_CUDA_WORKERS=1 npm start
 
 `MINER_CUDA_WORKERS` defaults to `1` because each CUDA process owns a large per-lane scratch buffer. `MINER_CUDA_LANES` defaults to `1024` lanes per process. Use more CUDA workers only when running multiple GPUs and after checking available VRAM. The CUDA path is Sandglass-only, matching the current network height; pre-fork Argon2id work continues to use the CPU engine.
 
+For an RTX 5090 with 32 GiB VRAM, `MINER_CUDA_FAST=1` selects `32768` lanes and one nonce per lane (about 16 GiB scratch) to keep more GPU multiprocessors occupied. Reduce `MINER_CUDA_LANES` if the GPU has less VRAM.
+
 Tagged releases also publish `brc-pow-cuda-linux-x86_64.tar.gz`, so a CUDA toolkit is not needed on the mining machine. Download the binary from the project Releases page and place it at `native/brc-pow-cuda/target/release/brc-pow-cuda`.
 
 ## Troubleshooting

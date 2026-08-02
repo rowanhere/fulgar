@@ -32,7 +32,8 @@ export function resolveCudaWorkers(raw = process.env.MINER_CUDA_WORKERS): number
 
 export function resolveCudaLanes(raw = process.env.MINER_CUDA_LANES): number {
   const n = Number((raw ?? '').trim());
-  return Number.isFinite(n) ? Math.max(1, Math.floor(n)) : 1024;
+  if (Number.isFinite(n) && n > 0) return Math.floor(n);
+  return process.env.MINER_CUDA_FAST === '1' ? 32768 : 1024;
 }
 
 type GrindProc = ChildProcessByStdio<Writable, Readable, Readable>;
@@ -302,7 +303,7 @@ export class CudaGrindPool {
 
 function resolveCudaNoncesPerLane(): number {
   const raw = (process.env.MINER_CUDA_NONCES_PER_LANE ?? '').trim();
-  if (raw === '') return 16;
+  if (raw === '') return process.env.MINER_CUDA_FAST === '1' ? 1 : 16;
   const n = Number(raw);
   if (!Number.isFinite(n)) return 16;
   return Math.max(1, Math.floor(n));
