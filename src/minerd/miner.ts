@@ -734,8 +734,9 @@ export async function runMiner(
   // Smart Max start at a lowered manual throttle and ramp up slowly instead of
   // going straight to full — see smartStartDuty().
   const startDuty = smartStartDuty(cfg.smart, cfg.throttle);
+  const cudaWorkers = useCuda ? resolveCudaWorkers() : 0;
   const pool: GrindPoolLike = useCuda
-    ? new CudaGrindPool(resolveCudaWorkers(), startDuty)
+    ? new CudaGrindPool(cudaWorkers, startDuty)
     : useNative
       ? new NativeGrindPool(cfg.workers, startDuty)
       : new GrindPool(cfg.workers, startDuty);
@@ -762,7 +763,7 @@ export async function runMiner(
     target: 'solo',
     backend: useCuda ? 'cuda' : useNative ? 'native' : 'wasm',
     backendNote,
-    workers: cfg.workers,
+    workers: useCuda ? cudaWorkers : cfg.workers,
     // The effective starting duty cycle: mode-derived in Smart, the manual value in
     // 'off'. (Not cfg.throttle — that would print the leftover manual throttle while
     // Smart Max actually starts at 100%.)
@@ -779,14 +780,16 @@ export async function runMiner(
   reporter.status(status);
 
   // One-time hashrate advice. Reads config only - it never writes a setting.
-  for (const hint of perfHints({
-    smart: cfg.smart as 'off' | 'max' | 'considerate',
-    throttle: startDuty,
-    workers: cfg.workers,
-    usableCores: cpuBudget().usableCores,
-    nodeMajor: nodeMajorOf(process.versions.node),
-  })) {
-    reporter.event('info', hint);
+  if (!useCuda) {
+    for (const hint of perfHints({
+      smart: cfg.smart as 'off' | 'max' | 'considerate',
+      throttle: startDuty,
+      workers: cfg.workers,
+      usableCores: cpuBudget().usableCores,
+      nodeMajor: nodeMajorOf(process.versions.node),
+    })) {
+      reporter.event('info', hint);
+    }
   }
 
   // Best-known network height (from the helper poll) + per-helper stale-episode
