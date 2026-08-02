@@ -210,8 +210,8 @@ test('bootstrap prefetches the next full page while applying the current page', 
     },
   };
   const getBlocks = async (from: number, max: number): Promise<any[]> => {
-    if (from === 501) nextRequestStarted = true;
-    if (from > 501) return [];
+    if (from === 201) nextRequestStarted = true;
+    if (from > 201) return [];
     return Array.from({ length: max }, (_, i) => ({
       header: { height: from + i, prevHash: new Uint8Array([0]) },
       transactions: [],

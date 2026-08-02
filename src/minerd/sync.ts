@@ -4,7 +4,7 @@ import type { Block } from '../chain/block.js';
 import { bytesToHex, compareBytes } from '../util/binary.js';
 import { SNAPSHOT_DEPTH } from '../chain/genesis.js';
 
-const PAGE = 500;
+const PAGE = 200;
 const CATCHUP_OVERLAP = 5; // re-fetch a few blocks below our tip to absorb small reorgs
 // when a fixed 5-block overlap can't reach the fork point (a reorg deeper than 5),
 // progressively widen the overlap toward the common ancestor instead of re-grinding
