@@ -641,7 +641,7 @@ export class DashboardReporter implements MinerReporter {
     } else if (s.mode === 'pool') targetTxt = `${GREEN}${s.target}${RESET}`;
     else targetTxt = `${YELLOW}solo${RESET}`;
     const backendTxt = s
-      ? `${DIM}${s.backend === 'native' ? 'native' : 'wasm'} · ${group(s.workers)} cores${RESET}`
+      ? `${DIM}${s.backend} · ${group(s.workers)} cores${RESET}`
       : '';
     const clk = `${DIM}${this.clock(Date.now())}${RESET}`;
     // Left cluster, then right-align the clock within the row.
