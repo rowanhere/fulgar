@@ -4,7 +4,7 @@ import type { Block } from '../chain/block.js';
 import { bytesToHex, compareBytes } from '../util/binary.js';
 import { SNAPSHOT_DEPTH } from '../chain/genesis.js';
 
-const PAGE = 200;
+const PAGE = 500;
 const CATCHUP_OVERLAP = 5; // re-fetch a few blocks below our tip to absorb small reorgs
 // when a fixed 5-block overlap can't reach the fork point (a reorg deeper than 5),
 // progressively widen the overlap toward the common ancestor instead of re-grinding
@@ -83,19 +83,54 @@ export class ChainSync {
   async bootstrap(onProgress?: (height: number) => void, preferBase?: string): Promise<void> {
     const report = onProgress ?? this.deps.onProgress;
     let from = this.chain.height + 1; // genesis (0) is already seeded
+    // Keep one request in flight while the current page is being verified and
+    // applied. Network latency is independent of consensus replay, so this
+    // removes a full /blocks round-trip from every page without allowing pages
+    // to be applied out of order.
+    let prefetched: Promise<Block[]> | null = null;
     for (;;) {
-      const blocks = await this.deps.getBlocks(from, PAGE, preferBase);
+      const blocks = await (prefetched ?? this.deps.getBlocks(from, PAGE, preferBase));
+      prefetched = null;
       if (blocks.length === 0) return;
       const heightBefore = this.chain.height;
-      await this.applyBatch(blocks);
+
+      // Only a full page can have a successor. The expected start is checked
+      // after applyBatch because a rejected or unusual page must not cause us
+      // to trust a request made from the wrong local height.
+      const nextFrom = from + blocks.length;
+      if (blocks.length === PAGE) {
+        prefetched = this.deps.getBlocks(nextFrom, PAGE, preferBase);
+      }
+
+      try {
+        await this.applyBatch(blocks);
+      } catch (err) {
+        // Avoid an unhandled rejection if validation fails while the lookahead
+        // request is still in flight. Its result is never safe to reuse after
+        // an apply error.
+        await prefetched?.catch(() => undefined);
+        prefetched = null;
+        throw err;
+      }
       // Report progress after every page so the UI/logs advance steadily.
       report?.(this.chain.height);
       // If no block was accepted the chain didn't advance — every block in the
       // page was rejected (PoW invalid, parent unknown, stateRoot mismatch, …).
       // Continuing would re-fetch the same page forever, so bail out.
-      if (this.chain.height === heightBefore) return;
+      if (this.chain.height === heightBefore) {
+        await prefetched?.catch(() => undefined);
+        prefetched = null;
+        return;
+      }
       from = this.chain.height + 1;
       if (blocks.length < PAGE) return; // last (partial) page -> caught up
+      // A normal page advances exactly by its length, so the request started
+      // above is usable. If the chain advanced differently, discard it and
+      // fetch from the authoritative local height on the next iteration.
+      if (from !== nextFrom) {
+        await prefetched?.catch(() => undefined);
+        prefetched = null;
+      }
     }
   }
 

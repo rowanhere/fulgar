@@ -31,7 +31,7 @@ interface Route {
  *
  * The workers are created ONCE in the constructor and reused across every
  * `verify(blocks)` call. This is the hot path during bootstrap: ChainSync calls
- * verify once per 200-block page (~60 pages for a full chain). Spawning fresh
+ * verify once per sync page. Spawning fresh
  * workers per page (the old `verifyBlocksParallel` behavior) re-loaded tsx and
  * re-allocated the ~65 MB Argon2 WASM on every page, which dominated sync time.
  *

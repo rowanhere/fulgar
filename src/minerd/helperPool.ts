@@ -9,7 +9,7 @@ import type { Block } from '../chain/block.js';
 
 const DEFAULT_ROTATE_THRESHOLD = 3;
 const DEFAULT_TIP_TIMEOUT_MS = 8_000;     // short: a black-holed helper fails over fast
-const DEFAULT_BLOCKS_TIMEOUT_MS = 30_000; // generous: /blocks can return up to 200 blocks
+const DEFAULT_BLOCKS_TIMEOUT_MS = 30_000; // generous: /blocks can return up to the requested page size
 const DEFAULT_BLOCKS_ROUNDS = 4;
 const STALE_ROTATE_ROUNDS = 3; // consecutive best-trailing polls before the primary hands off
 export const STALE_WARN_BLOCKS = 2; // blocks behind the best claim before a helper is called stale

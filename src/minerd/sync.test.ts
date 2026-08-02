@@ -192,3 +192,40 @@ test('a reset-recovery bootstrap re-syncs through the claimant, not the (possibl
     `every fetch (incl. the recovery bootstrap) used the claimant: ${JSON.stringify(prefers)}`,
   );
 });
+
+test('bootstrap prefetches the next full page while applying the current page', async () => {
+  let height = 0;
+  let applyStarted = false;
+  let nextRequestStarted = false;
+  let releaseApply!: () => void;
+  const applyGate = new Promise<void>((resolve) => { releaseApply = resolve; });
+  const chain = {
+    get height() { return height; },
+    get tip() { return { hash: new Uint8Array([height]) }; },
+    addBlockWithPow: async (block: any): Promise<string | null> => {
+      applyStarted = true;
+      await applyGate;
+      height = block.header.height;
+      return null;
+    },
+  };
+  const getBlocks = async (from: number, max: number): Promise<any[]> => {
+    if (from === 501) nextRequestStarted = true;
+    if (from > 501) return [];
+    return Array.from({ length: max }, (_, i) => ({
+      header: { height: from + i, prevHash: new Uint8Array([0]) },
+      transactions: [],
+    }));
+  };
+  const sync = new ChainSync({
+    chain: chain as any,
+    cores: 1,
+    getBlocks,
+    verifyBlocksParallel: async (blocks) => blocks.map(() => true),
+  });
+  const run = sync.bootstrap();
+  while (!applyStarted) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(nextRequestStarted, true, 'the successor request should overlap current-page apply');
+  releaseApply();
+  await run;
+});

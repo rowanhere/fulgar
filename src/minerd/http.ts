@@ -42,7 +42,7 @@ export function isValidTipBody(body: unknown): boolean {
 }
 
 // Bound every solo helper fetch so a half-open connection can't wedge sync/submit.
-// Generous because /blocks can return up to 200 blocks; /tip and /block are quick.
+// Generous because /blocks can return up to the requested page size; /tip and /block are quick.
 const HTTP_TIMEOUT_MS = 30_000;
 const GET_JSON_ATTEMPTS = 4;
 const RETRY_BACKOFF_MS = [500, 1_000, 2_000, 4_000];

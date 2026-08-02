@@ -85,7 +85,7 @@ async function dryrun(): Promise<void> {
   const chain = new Blockchain();
 
   // Reuse one persistent VerifierPool across the whole bootstrap (workers created
-  // once, not respawned per 200-block page) so dryrun benefits from the same sync
+  // once, not respawned per sync page) so dryrun benefits from the same sync
   // speed-up as the live miner. The pool owns its worker count, so the `cores`
   // arg from ChainSync is ignored while it's bound; we terminate it right after
   // bootstrap so no worker handles linger.
