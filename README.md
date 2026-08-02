@@ -333,7 +333,7 @@ cd native/brc-pow-cuda && make && cd ../..
 MINER_POOL=solo MINER_CUDA=1 MINER_CUDA_WORKERS=1 npm start
 ```
 
-`MINER_CUDA_WORKERS` defaults to `1` because each CUDA process owns a large per-lane scratch buffer. Use more only when running multiple GPUs and after checking available VRAM. The CUDA path is Sandglass-only, matching the current network height; pre-fork Argon2id work continues to use the CPU engine.
+`MINER_CUDA_WORKERS` defaults to `1` because each CUDA process owns a large per-lane scratch buffer. `MINER_CUDA_LANES` defaults to `1024` lanes per process. Use more CUDA workers only when running multiple GPUs and after checking available VRAM. The CUDA path is Sandglass-only, matching the current network height; pre-fork Argon2id work continues to use the CPU engine.
 
 Tagged releases also publish `brc-pow-cuda-linux-x86_64.tar.gz`, so a CUDA toolkit is not needed on the mining machine. Download the binary from the project Releases page and place it at `native/brc-pow-cuda/target/release/brc-pow-cuda`.
 

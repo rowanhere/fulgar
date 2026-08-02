@@ -750,7 +750,7 @@ export async function runMiner(
       cfg.smart === 'considerate'
         ? {
           demand: createDemandSignal({ onWarn: (m) => reporter.event('warn', m) }),
-          workers: cfg.workers,
+      workers: useCuda ? resolveCudaWorkers() : cfg.workers,
           demandStart: startDuty,
         }
         : undefined,

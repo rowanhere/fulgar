@@ -30,6 +30,11 @@ export function resolveCudaWorkers(raw = process.env.MINER_CUDA_WORKERS): number
   return Number.isFinite(n) ? Math.max(1, Math.floor(n)) : 1;
 }
 
+export function resolveCudaLanes(raw = process.env.MINER_CUDA_LANES): number {
+  const n = Number((raw ?? '').trim());
+  return Number.isFinite(n) ? Math.max(1, Math.floor(n)) : 1024;
+}
+
 type GrindProc = ChildProcessByStdio<Writable, Readable, Readable>;
 
 interface Child {
@@ -172,7 +177,7 @@ export class CudaGrindPool {
       const noncesPerLane = this.activeGrind?.noncesPerLane ?? this.noncesPerLane;
       proc = spawn(
         CUDA_BIN,
-        ['grind', state.headerHex, state.targetHex, String(start), String(end), String(state.throttle), state.continuous ? '1' : '0', String(noncesPerLane)],
+        ['grind', state.headerHex, state.targetHex, String(start), String(end), String(state.throttle), state.continuous ? '1' : '0', String(resolveCudaLanes()), String(noncesPerLane)],
         { stdio: ['pipe', 'pipe', 'pipe'] },
       );
     } catch (err) {
