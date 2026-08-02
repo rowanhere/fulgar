@@ -2,7 +2,7 @@ NVCC ?= nvcc
 BUILD_DIR ?= target/release
 BIN := $(BUILD_DIR)/brc-pow-cuda
 
-NVCCFLAGS ?= -O3 -std=c++17
+NVCCFLAGS ?= -O3 -std=c++17 -cudart=static
 
 .PHONY: all clean
 

@@ -1,0 +1,39 @@
+name: CUDA release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  cuda:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build CUDA miner
+        run: |
+          docker run --rm \
+            -v "$PWD:/src" \
+            -w /src \
+            nvidia/cuda:12.6.3-devel-ubuntu22.04 \
+            bash -lc 'make -C native/brc-pow-cuda'
+
+      - name: Package binary
+        run: tar -C native/brc-pow-cuda/target/release -czf brc-pow-cuda-linux-x86_64.tar.gz brc-pow-cuda
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: brc-pow-cuda-linux-x86_64
+          path: brc-pow-cuda-linux-x86_64.tar.gz
+
+      - name: Publish GitHub release asset
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: brc-pow-cuda-linux-x86_64.tar.gz

@@ -335,6 +335,8 @@ MINER_POOL=solo MINER_CUDA=1 MINER_CUDA_WORKERS=1 npm start
 
 `MINER_CUDA_WORKERS` defaults to `1` because each CUDA process owns a large per-lane scratch buffer. Use more only when running multiple GPUs and after checking available VRAM. The CUDA path is Sandglass-only, matching the current network height; pre-fork Argon2id work continues to use the CPU engine.
 
+Tagged releases also publish `brc-pow-cuda-linux-x86_64.tar.gz`, so a CUDA toolkit is not needed on the mining machine. Download the binary from the project Releases page and place it at `native/brc-pow-cuda/target/release/brc-pow-cuda`.
+
 ## Troubleshooting
 
 - **The first sync takes a moment.** A fresh solo start downloads and verifies BrowserCoin's chain so you build on the right one. The `Verifying blockchain` bar (TUI) / `verifying … (P%)` lines (plain) show progress — it's working, not stuck. (Pool mining skips this; the pool serves the work.)
