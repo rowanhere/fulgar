@@ -460,6 +460,7 @@ export async function runMiner(
     chain,
     cores: cfg.syncWorkers,
     getBlocks: (from, max, preferBase) => helperPool.getBlocks(from, max, undefined, preferBase),
+    getBlocksBatch: (from, max, preferBase) => helperPool.getBlocksBatch(from, max, undefined, preferBase),
     verifyBlocksParallel: (blocks, cores) =>
       verifierPool && !verifierTerminated ? verifierPool.verify(blocks) : verifyBlocksParallel(blocks, cores),
     stateRetain: STATE_RETAIN,

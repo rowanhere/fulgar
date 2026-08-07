@@ -42,6 +42,8 @@ const DEFAULT_HELPERS = [
   'https://api1.browsercoin.org',
   'https://api2.browsercoin.org',
   'https://api1.taitech.eu',
+  'https://brc-api.solodragonsden.fun',
+  'https://browserswap.duckdns.org:9443',
   'https://api1.cryptec.tech',
 ];
 

@@ -256,6 +256,42 @@ export class HelperPool {
     throw lastErr ?? new AllHelpersFailed([]);
   }
 
+  /** Fetch distinct consecutive pages from every helper in parallel. The
+   * returned pages are still ordered by height; a failed or malformed later
+   * page simply ends this batch and the next bootstrap round refetches it via
+   * normal failover. The first page falls back to getBlocks() so a dead/stale
+   * helper can never make bootstrap stop at a gap. */
+  async getBlocksBatch(from: number, max = 200, signal?: AbortSignal, preferBase?: string): Promise<Block[]> {
+    const order = this.order(preferBase);
+    const results = await Promise.allSettled(order.map((idx, page) =>
+      this.getBlocksFn(this.helpers[idx]!, from + page * max, max, signal, {
+        attempts: 1,
+        timeoutMs: this.blocksTimeoutMs,
+      }),
+    ));
+    const out: Block[] = [];
+    for (let page = 0; page < results.length; page++) {
+      const result = results[page]!;
+      if (result.status === 'rejected') {
+        const err = result.reason as Error;
+        if (err?.name === 'AbortError') throw err;
+        this.onDebug(`parallel blocks via ${this.helpers[order[page]!]!} failed: ${err?.message}`);
+        break;
+      }
+      const blocks = result.value;
+      const expected = from + page * max;
+      if (blocks.length === 0) break;
+      if (blocks[0]!.header.height !== expected) {
+        this.onDebug(`parallel blocks via ${this.helpers[order[page]!]!} returned height ${blocks[0]!.header.height}, expected ${expected}`);
+        break;
+      }
+      out.push(...blocks);
+      if (blocks.length < max) break;
+    }
+    if (out.length > 0) return out;
+    return this.getBlocks(from, max, signal, preferBase);
+  }
+
   async blockAt(height: number, signal?: AbortSignal): Promise<Block | undefined> {
     const blocks = await this.round('block', (base) => this.getBlocksFn(base, height, 1, signal, { attempts: 1, timeoutMs: this.blocksTimeoutMs }));
     return blocks[0];

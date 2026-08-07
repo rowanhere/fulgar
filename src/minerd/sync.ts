@@ -57,6 +57,8 @@ export interface SyncDeps {
   chain: Blockchain;
   cores: number;
   getBlocks: (fromHeight: number, max: number, preferBase?: string) => Promise<Block[]>;
+  /** Optional parallel bootstrap fetch. Pages must be returned oldest-first. */
+  getBlocksBatch?: (fromHeight: number, max: number, preferBase?: string) => Promise<Block[]>;
   // The `cores` arg is honored by the one-shot verifyBlocksParallel but is
   // ignored when a persistent VerifierPool is bound (the pool already owns its
   // worker count). The interface shape is kept stable for both callers.
@@ -89,7 +91,8 @@ export class ChainSync {
     // to be applied out of order.
     let prefetched: Promise<Block[]> | null = null;
     for (;;) {
-      const blocks = await (prefetched ?? this.deps.getBlocks(from, PAGE, preferBase));
+      const fetchBlocks = this.deps.getBlocksBatch ?? this.deps.getBlocks;
+      const blocks = await (prefetched ?? fetchBlocks(from, PAGE, preferBase));
       prefetched = null;
       if (blocks.length === 0) return;
       const heightBefore = this.chain.height;
@@ -98,8 +101,8 @@ export class ChainSync {
       // after applyBatch because a rejected or unusual page must not cause us
       // to trust a request made from the wrong local height.
       const nextFrom = from + blocks.length;
-      if (blocks.length === PAGE) {
-        prefetched = this.deps.getBlocks(nextFrom, PAGE, preferBase);
+      if (blocks.length >= PAGE) {
+        prefetched = fetchBlocks(nextFrom, PAGE, preferBase);
       }
 
       try {
